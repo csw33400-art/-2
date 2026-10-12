@@ -143,7 +143,7 @@ with tab2:
     residuals = Y - y_pred_target
     
     fig_res = go.Figure()
-    fig_res.add_trace(go.Scatter(x=Y_pred_target, y=residuals, mode='markers', marker=dict(color='purple', size=8)))
+    fig_res.add_trace(go.Scatter(x=y_pred_target, y=residuals, mode='markers', marker=dict(color='purple', size=8)))
     fig_res.add_hline(y=0, line_dash="dash", line_color="red")
     fig_res.update_layout(title=f"{selected_model} 잔차 분포", xaxis_title="예측값 (Predicted)", yaxis_title="잔차 (Residuals)")
     st.plotly_chart(fig_res, use_container_width=True)
