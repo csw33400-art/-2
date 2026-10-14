@@ -1,4 +1,10 @@
-"""보고서용 실험: app.py와 같은 모델·기본 하이퍼파라미터로 3개 데이터셋 비교 + 과적합 분석."""
+"""설명서의 실험을 재현하는 스크립트.
+
+app.py와 같은 모델·기본 하이퍼파라미터로 3개 데이터셋의 모델을 비교하고, 학습 데이터 크기에 따른 성능을 측정한다.
+
+사용법 (저장소 최상위 폴더에서):
+    python docs/experiments.py data/concrete.csv docs/results.json
+"""
 import json, sys, time, warnings
 import numpy as np, pandas as pd
 from scipy import stats
@@ -135,7 +141,7 @@ res = {}
 # ---------- 데이터 ----------
 con = pd.read_csv(CONCRETE)
 con_names = ["시멘트", "고로슬래그", "플라이애시", "물", "고성능감수제", "굵은골재", "잔골재", "재령(일)"]
-Xc, Yc = con.iloc[:, :8].values.astype(float), con["strength"].values.astype(float)
+Xc, Yc = con.iloc[:, :8].values.astype(float), con.iloc[:, 8].values.astype(float)
 dia = load_diabetes(as_frame=True).frame
 dia_names = list(dia.columns[:10])
 Xd, Yd = dia.iloc[:, :10].values, dia["target"].values

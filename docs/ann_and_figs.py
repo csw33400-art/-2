@@ -1,3 +1,10 @@
+"""인공신경망 구조 실험(노드 수·층 수·활성화 함수·규제)과 설명서 그래프를 만드는 스크립트.
+
+experiments.py를 먼저 실행해 results.json을 만든 뒤 사용한다.
+
+사용법 (저장소 최상위 폴더에서):
+    python docs/ann_and_figs.py data/concrete.csv docs/results.json docs/figures
+"""
 import json, sys, warnings
 import numpy as np, pandas as pd
 import matplotlib
@@ -23,7 +30,7 @@ plt.rcParams.update({"font.family": "Noto Sans CJK KR", "axes.unicode_minus": Fa
 GREY, BLUE, ORANGE = "#9aa0a6", "#1f6feb", "#e8710a"
 
 con = pd.read_csv(CON)
-X, Y = con.iloc[:, :8].values.astype(float), con["strength"].values.astype(float)
+X, Y = con.iloc[:, :8].values.astype(float), con.iloc[:, 8].values.astype(float)
 Xtr, Xte, ytr, yte = train_test_split(X, Y, test_size=0.2, random_state=42)
 
 
