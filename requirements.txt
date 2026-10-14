@@ -5,3 +5,4 @@ scikit-learn
 scipy
 plotly
 openpyxl
+xlrd
