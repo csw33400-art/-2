@@ -3,6 +3,7 @@ import json
 import pickle
 import time
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -113,15 +114,21 @@ def read_uploaded(name, raw, sheet):
     return pd.read_excel(io.BytesIO(raw), sheet_name=sheet or 0)
 
 
+DATA_DIR = Path(__file__).resolve().parent / "data"
+SAMPLES = {
+    "콘크리트 압축강도 (UCI 공개 데이터, 1,030행)": (
+        "I-C. Yeh (1998), UCI Machine Learning Repository, CC BY 4.0 · "
+        "[doi:10.24432/C5PK67](https://doi.org/10.24432/C5PK67)"),
+    "당뇨병 진행도 (scikit-learn 공개 데이터, 442행)": (
+        "Efron et al. (2004), Least Angle Regression, Annals of Statistics · scikit-learn 내장 데이터"),
+    "비선형 합성 데이터 (150행)": "y = 3·sin(x) + 0.8·x + 5 + 정규잡음(σ=0.6)으로 생성한 연습용 데이터",
+}
+
+
 @st.cache_data(show_spinner=False)
 def load_sample(name):
     if name.startswith("콘크리트"):
-        return pd.DataFrame({
-            'Cement': [540, 540, 332.5, 332.5, 198.6, 266, 380, 380, 266, 475],
-            'Water': [162, 162, 228, 228, 192, 228, 228, 228, 228, 228],
-            'Age': [28, 28, 270, 365, 360, 90, 365, 28, 28, 28],
-            'Strength': [79.99, 61.89, 40.27, 41.05, 44.30, 47.03, 43.70, 36.45, 45.85, 39.29],
-        })
+        return pd.read_csv(DATA_DIR / "concrete.csv")
     if name.startswith("당뇨"):
         return load_diabetes(as_frame=True).frame
     rng = np.random.default_rng(0)
@@ -157,10 +164,8 @@ if uploaded_file is not None:
         st.stop()
     data_name = uploaded_file.name
 else:
-    data_name = st.sidebar.selectbox(
-        "샘플 데이터 선택:",
-        ["콘크리트 압축강도 (10행)", "당뇨병 진행도 (442행, sklearn)", "비선형 합성 데이터 (150행)"],
-    )
+    data_name = st.sidebar.selectbox("샘플 데이터 선택:", list(SAMPLES))
+    st.sidebar.caption(f"출처: {SAMPLES[data_name]}")
     df = load_sample(data_name)
 
 num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
