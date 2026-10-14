@@ -1,7 +1,7 @@
-streamlit
+streamlit>=1.51
 pandas
 numpy
-scikit-learn
+scikit-learn>=1.2
 scipy
 plotly
 openpyxl
