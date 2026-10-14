@@ -4,8 +4,11 @@
 
 | 과제 | 내용 | 설명서 |
 | --- | --- | --- |
-| 과제 1 | 공개 자료로 선형회귀·비선형회귀를 수행하는 프로그램 | 별도 제출 |
-| 과제 2 | 공개 자료로 인공신경망을 이용한 데이터 예측 프로그램 | [Notion 설명서](https://www.notion.so/3f97a239be9581c58146d2829751f57d) |
+| 과제 1 | 공개 자료로 선형회귀·비선형회귀를 수행하는 프로그램 | [Notion 설명서](https://www.notion.so/3e8361e0fce780ca92f9c0e32fbaffdb) |
+| 과제 2 | 공개 자료로 인공신경망을 이용한 데이터 예측 프로그램 | [Notion 설명서](https://www.notion.so/630361e0fce78206b1f3813ff1f691fa) |
+
+- 웹에서 바로 실행: https://2flnfab8wrd8cdseatvmj4.streamlit.app
+- 과제 모음 페이지: [데이터처리개론 과제 (Notion)](https://www.notion.so/3f9361e0fce781609556d7190fe57ba1)
 
 ## 한눈에 보는 결과
 
