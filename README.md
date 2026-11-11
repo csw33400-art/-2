@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 과제 1 | 공개 자료로 선형회귀·비선형회귀를 수행하는 프로그램 | [Notion 설명서](https://azure-raven-7e9.notion.site/3e8361e0fce780ca92f9c0e32fbaffdb) |
 | 과제 2 | 공개 자료로 인공신경망을 이용한 데이터 예측 프로그램 | [Notion 설명서](https://azure-raven-7e9.notion.site/630361e0fce78206b1f3813ff1f691fa) |
-| 오픈소스 LLM 챗봇 | 채팅만으로 선형·비선형 회귀, 인공신경망, 딥러닝을 실행하는 챗봇 | [llm_chat/README.md](llm_chat/README.md) |
+| 오픈소스 LLM 챗봇 | 채팅만으로 선형·비선형 회귀, 인공신경망, 딥러닝을 실행하는 챗봇 | [Notion 설명서](https://azure-raven-7e9.notion.site/415361e0fce78150b289ea116d183560) · [코드 설명](llm_chat/README.md) |
 
 - 웹에서 바로 실행: https://2flnfab8wrd8cdseatvmj4.streamlit.app
 - 과제 모음 페이지: [데이터처리개론 과제 (Notion)](https://azure-raven-7e9.notion.site/3f9361e0fce781609556d7190fe57ba1)
