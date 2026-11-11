@@ -10,6 +10,7 @@
     pip install -r llm_chat/requirements.txt
     streamlit run llm_chat/app.py
 """
+import importlib
 import json
 import os
 import re
@@ -25,6 +26,14 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import knowledge as K  # noqa: E402
 import tools as T  # noqa: E402
+
+# 코드를 새로 올리면 서버는 app.py만 다시 읽고 tools·knowledge는 예전 것을 계속 쓴다.
+# 파일이 바뀌었으면 다시 불러와서 app.py와 버전이 어긋나지 않게 한다.
+_STAMP = tuple(os.path.getmtime(m.__file__) for m in (K, T))
+if getattr(sys, "_chat_modules_stamp", _STAMP) != _STAMP:
+    importlib.reload(K)
+    importlib.reload(T)
+sys._chat_modules_stamp = _STAMP
 
 st.set_page_config(page_title="오픈소스 LLM 챗봇", page_icon="💬", layout="centered")
 
