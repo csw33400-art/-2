@@ -928,12 +928,13 @@ SWEEP_WORDS = ("늘어나", "늘리", "증가", "커지", "높아", "높이", "�
 def parse_sweep(state, text):
     """'시멘트를 100에서 500까지 바꾸면', '물이 늘어나면 강도는?' → (열, 시작, 끝). 아니면 None."""
     t = norm(text)
-    for _, e, c in _find(text, state["x"]):
+    cols = [c for c in numeric_cols(state) if c != state["y"]]     # X에 없는 변수도 인식
+    for _, e, c in _find(text, cols):
         m = re.match(r"[^\d\-]{0,6}(-?\d+(?:\.\d+)?)[^\d\-]{0,3}(?:에서|부터|~|-)(-?\d+(?:\.\d+)?)", t[e:])
         if m:
             return c, float(m.group(1)), float(m.group(2))
     if any(w in t for w in SWEEP_WORDS) and not re.search(r"\d", t):
-        hit = _find(text, state["x"])
+        hit = _find(text, cols)
         if hit:
             d = state["df"][hit[0][2]]
             return hit[0][2], float(d.min()), float(d.max())
@@ -952,6 +953,17 @@ def _base_row(state, keep):
         else:
             base[c] = float(d[c].median() if d[c].nunique() <= 2 else d[c].mean())
     return base, kept
+
+
+def _add_inputs(state, cols, notes):
+    """입력 변수에 없던 변수를 사용자가 말하면 변수에 추가하고 같은 모델들을 다시 학습한다."""
+    extra = [c for c in cols if c not in state["x"]]
+    if extra:
+        trained = list(state["results"]) or ["linear", "ann"]
+        state.update(x=state["x"] + extra, results={})
+        for k in trained:
+            RUNNERS[k](state)
+        notes.append(f"{', '.join(short(c) for c in extra)}은(는) 입력 변수에 없어서 추가하고 모델을 다시 학습했어요.")
 
 
 def _ensure_models(state, notes):
@@ -974,13 +986,7 @@ KEEP_WORDS = ("바꾸", "바꿔", "바뀌", "올리", "내리", "늘리", "줄�
 def run_predict(state, vals, text=""):
     """입력값에 따라 예측한다. 값을 여러 개 주면 경우별로, 일부만 바꾸면 직전 입력을 이어서 계산한다."""
     notes = []
-    extra = [c for c in vals if c not in state["x"]]
-    if extra:                                                # 입력 변수에 없던 변수의 값을 주면 변수에 추가하고 다시 학습
-        trained = list(state["results"]) or ["linear", "ann"]
-        state.update(x=state["x"] + extra, results={})
-        for k in trained:
-            RUNNERS[k](state)
-        notes.append(f"{', '.join(short(c) for c in extra)}은(는) 입력 변수에 없어서 추가하고 모델을 다시 학습했어요.")
+    _add_inputs(state, list(vals), notes)
     rs = _ensure_models(state, notes)
     t = norm(text)
     keep = bool(state.get("inputs")) and any(w in t for w in KEEP_WORDS)
@@ -1033,6 +1039,7 @@ def run_predict(state, vals, text=""):
 def run_sweep(state, col, lo, hi, vals=None, text=""):
     """한 변수를 lo~hi로 바꿀 때 예측값이 어떻게 변하는지 그린다 (나머지 변수는 고정)."""
     notes = []
+    _add_inputs(state, [col] + list(vals or {}), notes)
     rs = _ensure_models(state, notes)
     lo, hi = min(lo, hi), max(lo, hi)
     if lo == hi:
