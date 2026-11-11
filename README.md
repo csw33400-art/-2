@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 과제 1 | 공개 자료로 선형회귀·비선형회귀를 수행하는 프로그램 | [Notion 설명서](https://azure-raven-7e9.notion.site/3e8361e0fce780ca92f9c0e32fbaffdb) |
 | 과제 2 | 공개 자료로 인공신경망을 이용한 데이터 예측 프로그램 | [Notion 설명서](https://azure-raven-7e9.notion.site/630361e0fce78206b1f3813ff1f691fa) |
-| 오픈소스 LLM 챗봇 | 채팅만으로 선형·비선형 회귀, 인공신경망, 딥러닝을 실행하는 챗봇 | [Notion 설명서](https://azure-raven-7e9.notion.site/415361e0fce78150b289ea116d183560) · [코드 설명](llm_chat/README.md) |
+| 과제 3 | 오픈소스 LLM을 설치해 만든 챗봇 (자유 대화 + 채팅으로 회귀·신경망·딥러닝 실행) | [Notion 설명서](https://azure-raven-7e9.notion.site/415361e0fce78150b289ea116d183560) · [프로그램 설명서](llm_chat/docs/PROGRAM.md) · [코드 설명서](llm_chat/docs/CODE.md) |
 
 - 웹에서 바로 실행: https://2flnfab8wrd8cdseatvmj4.streamlit.app
 - 과제 모음 페이지: [데이터처리개론 과제 (Notion)](https://azure-raven-7e9.notion.site/3f9361e0fce781609556d7190fe57ba1)
@@ -67,6 +67,7 @@ streamlit run app.py
 │   ├── tools.py           # 채팅으로 실행하는 분석 도구 (회귀·신경망·예측·보고서)
 │   ├── knowledge.py       # 자유 대화용 참고 메모와 검색 (작은 RAG)
 │   ├── llm_worker.py      # 언어모델을 별도 프로세스로 실행 (모델이 멈춰도 웹 앱은 유지)
+│   ├── docs/              # 과제 3 프로그램 설명서(PROGRAM.md)와 코드 설명서(CODE.md)
 │   ├── requirements.txt   # 채팅 앱 전용 패키지 (llama-cpp-python 등)
 │   └── README.md          # 모델 선정 이유와 구성
 ├── data/
