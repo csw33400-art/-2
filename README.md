@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | 과제 1 | 공개 자료로 선형회귀·비선형회귀를 수행하는 프로그램 | [Notion 설명서](https://azure-raven-7e9.notion.site/3e8361e0fce780ca92f9c0e32fbaffdb) |
 | 과제 2 | 공개 자료로 인공신경망을 이용한 데이터 예측 프로그램 | [Notion 설명서](https://azure-raven-7e9.notion.site/630361e0fce78206b1f3813ff1f691fa) |
+| 오픈소스 LLM 챗봇 | 채팅만으로 선형·비선형 회귀, 인공신경망, 딥러닝을 실행하는 챗봇 | [llm_chat/README.md](llm_chat/README.md) |
 
 - 웹에서 바로 실행: https://2flnfab8wrd8cdseatvmj4.streamlit.app
 - 과제 모음 페이지: [데이터처리개론 과제 (Notion)](https://azure-raven-7e9.notion.site/3f9361e0fce781609556d7190fe57ba1)
@@ -61,6 +62,11 @@ streamlit run app.py
 .
 ├── app.py                 # Streamlit 대시보드 (프로그램 본체)
 ├── requirements.txt       # 필요한 패키지
+├── llm_chat/
+│   ├── app.py             # 채팅 전용 데이터 분석 챗봇 (별도 Streamlit 앱)
+│   ├── tools.py           # 채팅으로 실행하는 분석 도구 (회귀·신경망·예측·보고서)
+│   ├── requirements.txt   # 채팅 앱 전용 패키지 (llama-cpp-python 등)
+│   └── README.md          # 모델 선정 이유와 구성
 ├── data/
 │   ├── concrete.csv       # UCI 콘크리트 압축강도 공개 데이터 (1,030행)
 │   └── README.md          # 데이터 출처·라이선스·변수 설명
