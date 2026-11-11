@@ -94,7 +94,10 @@ HELP = """**채팅으로 할 수 있는 것**
 | 인공신경망 | "인공신경망 학습해줘", "은닉층 32-16, tanh, 에포크 500으로 신경망 학습해줘" |
 | 딥러닝 | "딥러닝으로 해줘", "128-64-32-16 딥러닝 돌려줘" |
 | 모델 비교 | "전부 비교해줘" |
-| 예측 | "시멘트 300, 물 180, 재령 28일 때 예측해줘" |
+| 예측 | "시멘트 300, 물 180, 재령 28일 때 예측해줘", "시멘트 350 물 170이면?" |
+| 값 바꿔 보기 | "물을 200으로 바꾸면?" (나머지는 직전 입력 유지), "재령 7, 28, 90일 때 각각 예측해줘" |
+| 변화 보기 | "시멘트를 100에서 500까지 바꾸면 어떻게 변해?", "물이 늘어나면 강도는?" |
+| 새 변수 만들기 | "물시멘트비 = 물 / 시멘트 변수 만들어줘", "로그재령 = log(재령) 변수 추가해줘" |
 | 보고서 | "보고서 만들어줘" |
 | 기억 | "지난번에 뭐 했지?", "기억 지워줘" |
 | 현재 상태 | "지금 상태 알려줘" |
@@ -407,13 +410,30 @@ def route(text, files):
 
     explain_q, strong, generic = has(t, *EXPLAIN), has(t, *STRONG), has(t, *GENERIC)
 
-    # --- 예측 ---
+    # --- 새 변수 만들기: "물시멘트비 = 물 / 시멘트 변수 만들어줘" ---
+    mk = re.search(r"([가-힣A-Za-z_][\w가-힣]*)\s*(?:=|은|는)\s*(.+)", text)
+    if mk and "=" in text and has(t, "만들", "추가", "새변수", "정의", "생성") and not has(t, "보고서"):
+        ensure_data(out)
+        mk = re.search(r"([가-힣A-Za-z_][\w가-힣]*)\s*=\s*(.+)", text)
+        return out + [T.add_variable(an, mk.group(1), mk.group(2))], False
+
+    # --- 입력값에 따른 예측: 한 번 예측, 경우별 예측, 범위 변화 ---
+    intents0 = detect_intents(t, text)
     if "예측" in t and re.search(r"\d", t):
         ensure_data(out)
+    if an["df"] is not None and not (intents0 and "예측" not in t):
         vals = T.parse_inputs(an, text)
-        if vals:
-            rep = T.run_predict(an, vals)
-            T.remember(rep["summary"])
+        sweep = T.parse_sweep(an, text)
+        if sweep:
+            rep = T.run_sweep(an, *sweep, vals=vals, text=text)
+        elif vals:
+            rep = T.run_predict(an, vals, text)
+        else:
+            rep = None
+        if rep:
+            if rep.get("summary"):
+                T.remember(rep["summary"])
+                rep["explain"] = True
             return out + [rep], False
 
     # --- 분석 실행 ---
