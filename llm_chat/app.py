@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -149,6 +150,18 @@ def cpu_threads():
     return max(1, min(n, 4))
 
 
+WORKER_LOG = Path(tempfile.gettempdir()) / "llm_worker.log"
+
+
+def worker_log_tail(n=400):
+    """언어모델 프로세스가 남긴 마지막 오류 글 (원인 확인용)."""
+    try:
+        text = WORKER_LOG.read_text(encoding="utf-8", errors="replace").strip()
+        return (" · 로그: …" + text[-n:].replace("\n", " ⏎ ")) if text else ""
+    except OSError:
+        return ""
+
+
 SIGNALS = {-9: "메모리 부족으로 강제 종료됨", -4: "이 서버 CPU가 지원하지 않는 명령어", -11: "모델 내부 오류(세그멘테이션 폴트)"}
 
 
@@ -168,7 +181,7 @@ class LLMWorker:
             if not line:                                   # 프로세스가 죽었음
                 code = self.proc.poll()
                 self.stop()
-                raise RuntimeError(f"언어모델 프로세스가 멈췄어요 ({SIGNALS.get(code, f'종료 코드 {code}')})")
+                raise RuntimeError(f"언어모델 프로세스가 멈췄어요 ({SIGNALS.get(code, f'종료 코드 {code}')}){worker_log_tail()}")
             try:
                 return json.loads(line)
             except ValueError:
@@ -195,11 +208,12 @@ class LLMWorker:
                 worker = str(Path(__file__).resolve().parent / "llm_worker.py")
                 self.proc = subprocess.Popen(
                     [sys.executable, worker, info["repo"], info["file"], str(cpu_threads())],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1)
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(WORKER_LOG, "w", encoding="utf-8"),
+                    text=True, encoding="utf-8", bufsize=1)
                 msg = self._read()
                 if not msg.get("ready"):
                     self.stop()
-                    raise RuntimeError(msg.get("error", "언어모델을 불러오지 못했어요"))
+                    raise RuntimeError(msg.get("error", "언어모델을 불러오지 못했어요") + worker_log_tail())
                 self.name = name
         finally:
             self.lock.release()
@@ -336,6 +350,36 @@ def settings_command(t):
     return None
 
 
+def diagnose():
+    """서버와 언어모델 상태를 점검해 채팅에 보여 준다 ("진단"이라고 입력)."""
+    import importlib.metadata as md
+    import platform
+
+    cpus, mem_gb = server_spec()
+    lines = [f"- 파이썬 {platform.python_version()} · {platform.machine()} · CPU {cpus}코어(사용 {cpu_threads()}) · 메모리 {mem_gb:.1f}GB" if mem_gb
+             else f"- 파이썬 {platform.python_version()} · CPU {cpus}코어"]
+    for pkg in ("llama-cpp-python", "huggingface-hub", "streamlit", "scikit-learn", "numpy"):
+        try:
+            lines.append(f"- {pkg} {md.version(pkg)}")
+        except md.PackageNotFoundError:
+            lines.append(f"- ❌ {pkg} 설치 안 됨")
+    try:
+        r = subprocess.run([sys.executable, "-c", "import llama_cpp; print(llama_cpp.__version__)"],
+                           capture_output=True, text=True, timeout=60)
+        lines.append(f"- llama_cpp 불러오기: {'✅ ' + r.stdout.strip() if r.returncode == 0 else '❌ 코드 ' + str(r.returncode) + ' ' + r.stderr.strip()[-300:]}")
+    except Exception as e:
+        lines.append(f"- llama_cpp 불러오기: ❌ {e}")
+    w = worker()
+    alive = w.proc is not None and w.proc.poll() is None
+    lines.append(f"- 언어모델 프로세스: {'✅ 실행 중 (' + str(w.name) + ')' if alive else '꺼져 있음'}")
+    if st.session_state.get("llm_error"):
+        lines.append(f"- 마지막 오류: {st.session_state.llm_error}")
+    tail = worker_log_tail(600)
+    if tail:
+        lines.append(f"- 언어모델 로그{tail}")
+    return "**🩺 진단 결과**\n\n" + "\n".join(lines)
+
+
 def detect_intents(t, raw):
     if has(t, "비교") or (has(t, "전부", "모두", "싹다", "네가지", "4가지", "다해") and has(t, "모델", "회귀", "돌려", "해줘", "해봐")):
         return ["compare"]
@@ -384,6 +428,8 @@ def route(text, files):
         s = settings_command(t)
         if s:
             return [T.reply(s)], False
+        if has(t, "진단", "상태점검", "diagnos"):
+            return [T.reply(diagnose())], False
         if has(t, "데이터", "자료") and has(t, "목록", "종류", "뭐있", "뭐가있", "어떤데이터", "어떤자료", "리스트", "쓸수있"):
             return [T.dataset_list()], False
         made = T.make_data(text)                        # "y = 2x + 3 데이터 만들어줘"
