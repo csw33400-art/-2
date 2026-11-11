@@ -78,7 +78,7 @@ Y_HINTS = ("target", "label", "price", "output", "result", "score", "가격", "�
 
 
 def new_state():
-    return {"df": None, "key": None, "name": None, "x": [], "y": None, "results": {}}
+    return {"df": None, "key": None, "name": None, "x": [], "y": None, "results": {}, "inputs": {}}
 
 
 def reply(text, items=None, summary=None):
@@ -224,7 +224,7 @@ def _set_data(state, df, name, key=None, y=None):
         return reply(f"⚠️ '{name}'에서 분석할 수 있는 숫자 열을 2개 이상 찾지 못했어요. (X 1개 이상 + Y 1개, 3행 이상 필요)\n\n"
                      f"읽은 열: {', '.join(map(str, df.columns[:15]))}")
     y = y if y in num else _guess_y(df, num)
-    state.update(df=df, name=name, key=key, y=y, x=[c for c in num if c != y], results={})
+    state.update(df=df, name=name, key=key, y=y, x=[c for c in num if c != y], results={}, inputs={})
     remember(f"데이터 '{name}' 불러옴 ({len(df):,}행)")
     xs = ", ".join(short(c) for c in state["x"][:12]) + (f" 외 {len(state['x']) - 12}개" if len(state["x"]) > 12 else "")
     note = ("\n\n" + "\n".join(f"- ℹ️ {n}" for n in notes)) if notes else ""
@@ -519,6 +519,7 @@ def parse_vars(state, text):
     if not new_x or (new_x == state["x"] and new_y == state["y"]):
         return None
     state.update(x=new_x, y=new_y, results={})
+    state["inputs"] = {c: v for c, v in (state.get("inputs") or {}).items() if c in new_x}
     xs = ", ".join(short(c) for c in new_x[:12]) + (f" 외 {len(new_x) - 12}개" if len(new_x) > 12 else "")
     out = f"🎯 변수를 정했어요. Y = **{short(new_y)}**, X = {xs}"
     if excluded:
@@ -906,49 +907,220 @@ def run_compare(state):
 
 
 def parse_inputs(state, text):
-    """'시멘트 300, 물 180'처럼 변수 이름 뒤에 온 숫자를 읽는다. 이름은 일부·한국어·영어 모두 인식."""
+    """'시멘트 300, 물 180'처럼 변수 이름 뒤에 온 숫자를 읽는다. {열: [값, …]}.
+
+    이름은 일부·한국어·영어 모두 인식하고, '재령 7, 28, 90'처럼 값을 여러 개 주면 모두 읽는다.
+    """
     t = norm(text)
     vals = {}
-    for _, e, c in _find(text, state["x"]):
-        m = re.match(r"[^\d\-]{0,6}(-?\d+(?:\.\d+)?)", t[e:])
-        if m:
-            vals[c] = float(m.group(1))
+    cols = [c for c in numeric_cols(state) if c != state["y"]]     # X에 없는 변수도 값을 주면 읽음
+    for _, e, c in _find(text, cols):
+        m = re.match(r"[^\d\-]{0,6}(-?\d+(?:\.\d+)?)((?:(?:,|와|과|랑|및|/)-?\d+(?:\.\d+)?)*)", t[e:])
+        if m and not re.match(r"(에서|부터|~|-)\d", t[e + m.end(1):]):       # "100에서 500까지"는 범위(parse_sweep)
+            vals[c] = [float(m.group(1))] + [float(v) for v in re.findall(r"-?\d+(?:\.\d+)?", m.group(2))]
     return vals
 
 
-def run_predict(state, vals):
-    notes = []
+SWEEP_WORDS = ("늘어나", "늘리", "증가", "커지", "높아", "높이", "올라", "올리", "줄어", "줄이", "감소", "작아", "낮아", "낮추", "내리",
+               "변하", "변화", "바꾸면", "바뀌면", "달라지", "민감도")
+
+
+def parse_sweep(state, text):
+    """'시멘트를 100에서 500까지 바꾸면', '물이 늘어나면 강도는?' → (열, 시작, 끝). 아니면 None."""
+    t = norm(text)
+    for _, e, c in _find(text, state["x"]):
+        m = re.match(r"[^\d\-]{0,6}(-?\d+(?:\.\d+)?)[^\d\-]{0,3}(?:에서|부터|~|-)(-?\d+(?:\.\d+)?)", t[e:])
+        if m:
+            return c, float(m.group(1)), float(m.group(2))
+    if any(w in t for w in SWEEP_WORDS) and not re.search(r"\d", t):
+        hit = _find(text, state["x"])
+        if hit:
+            d = state["df"][hit[0][2]]
+            return hit[0][2], float(d.min()), float(d.max())
+    return None
+
+
+def _base_row(state, keep):
+    """말하지 않은 변수에 넣을 값. keep이면 직전 입력값을 이어 쓰고, 없으면 평균(0/1 변수는 중앙값)."""
+    d = state["df"][state["x"]]
+    last = state.get("inputs") or {}
+    base, kept = {}, []
+    for c in state["x"]:
+        if keep and c in last:
+            base[c] = last[c]
+            kept.append(c)
+        else:
+            base[c] = float(d[c].median() if d[c].nunique() <= 2 else d[c].mean())
+    return base, kept
+
+
+def _ensure_models(state, notes):
     if not state["results"]:
         run_linear(state)
         run_ann(state)
         notes.append("학습된 모델이 없어서 선형 회귀와 인공신경망을 먼저 학습했어요.")
+    return sorted(state["results"].values(), key=lambda r: -r["test_r2"])
+
+
+def _predict(r, X):
+    with np.errstate(all="ignore"):
+        p = np.asarray(r["predict"](np.asarray(X, float)), float).ravel()
+    return np.where(np.isfinite(p), p, np.nan)
+
+
+KEEP_WORDS = ("바꾸", "바꿔", "바뀌", "올리", "내리", "늘리", "줄이", "그대로", "대신", "이번엔", "이번에는", "나머지는같", "만")
+
+
+def run_predict(state, vals, text=""):
+    """입력값에 따라 예측한다. 값을 여러 개 주면 경우별로, 일부만 바꾸면 직전 입력을 이어서 계산한다."""
+    notes = []
+    extra = [c for c in vals if c not in state["x"]]
+    if extra:                                                # 입력 변수에 없던 변수의 값을 주면 변수에 추가하고 다시 학습
+        trained = list(state["results"]) or ["linear", "ann"]
+        state.update(x=state["x"] + extra, results={})
+        for k in trained:
+            RUNNERS[k](state)
+        notes.append(f"{', '.join(short(c) for c in extra)}은(는) 입력 변수에 없어서 추가하고 모델을 다시 학습했어요.")
+    rs = _ensure_models(state, notes)
+    t = norm(text)
+    keep = bool(state.get("inputs")) and any(w in t for w in KEEP_WORDS)
+    base, kept = _base_row(state, keep)
     d = state["df"][state["x"]]
-    row, filled, outside = [], [], []
-    for c in state["x"]:
-        if c in vals:
-            row.append(vals[c])
-            if not d[c].min() <= vals[c] <= d[c].max():
-                outside.append(short(c))
-        else:
-            row.append(float(d[c].median() if d[c].nunique() <= 2 else d[c].mean()))
-            filled.append(short(c))
-    X = np.array([row])
-    rs = sorted(state["results"].values(), key=lambda r: -r["test_r2"])
-    preds = []
-    for r in rs:
-        with np.errstate(all="ignore"):
-            p = float(np.asarray(r["predict"](X), float).ravel()[0])
-        preds.append((r["label"], round(p, 3) if np.isfinite(p) else None, round(r["test_r2"], 3)))
-    table = pd.DataFrame(preds, columns=["모델", f"예측 {short(state['y'])}", "모델의 테스트 R²"])
-    inp = pd.DataFrame({"변수": [short(c) for c in state["x"]], "입력값": np.round(row, 3)})
+    cases = [dict(base)]
+    for c, vs in vals.items():                               # 여러 값을 준 변수는 경우를 나눔
+        cases = [dict(row, **{c: v}) for row in cases for v in vs][:24]
+    X = np.array([[row[c] for c in state["x"]] for row in cases])
+    outside = [short(c) for c, vs in vals.items() if any(not d[c].min() <= v <= d[c].max() for v in vs)]
+    filled = [short(c) for c in state["x"] if c not in vals and c not in kept]
+    best = rs[0]
+    yname = short(state["y"])
+    state["inputs"] = dict(cases[-1])
+    if kept and [c for c in kept if c not in vals]:
+        notes.append("말하지 않은 변수는 직전 입력값을 그대로 썼어요: " + ", ".join(f"{short(c)} {base[c]:g}" for c in kept if c not in vals))
     if filled:
-        notes.append(f"말하지 않은 변수({', '.join(filled)})는 평균값으로 채웠어요.")
+        notes.append(f"말하지 않은 변수({', '.join(filled[:8])}{' 등' if len(filled) > 8 else ''})는 데이터 평균값으로 채웠어요.")
     if outside:
         notes.append(f"⚠️ {', '.join(outside)} 값이 학습 데이터 범위를 벗어나서 예측을 믿기 어려워요.")
-    best = preds[0]
-    text = (f"### 🔮 예측 결과\n가장 정확한 모델인 **{best[0]}**의 예측은 **{short(state['y'])} = {best[1]}**이에요.\n\n"
-            + "\n".join(f"- {n}" for n in notes))
-    return reply(text, [("table", table), ("table", inp)], f"예측: {best[0]} → {short(state['y'])} {best[1]}")
+
+    if len(cases) == 1:
+        preds = [(r["label"], round(float(_predict(r, X)[0]), 3), round(r["test_r2"], 3)) for r in rs]
+        table = pd.DataFrame(preds, columns=["모델", f"예측 {yname}", "모델의 테스트 R²"])
+        inp = pd.DataFrame({"변수": [short(c) for c in state["x"]], "입력값": np.round(X[0], 3),
+                            "출처": ["입력" if c in vals else "직전 입력" if c in kept else "평균" for c in state["x"]]})
+        said = ", ".join(f"{short(c)} {v[0]:g}" for c, v in vals.items())
+        text_out = (f"### 🔮 예측 결과\n입력: {said}\n\n가장 정확한 모델인 **{best['label']}**의 예측은 **{yname} = {preds[0][1]}**이에요.\n\n"
+                    + "\n".join(f"- {n}" for n in notes)
+                    + "\n\n값을 바꿔 보려면 \"물을 200으로 바꾸면?\"처럼, 변화를 보려면 \"시멘트를 100에서 500까지 바꾸면?\"처럼 말하세요.")
+        return reply(text_out, [("table", table), ("table", inp)], f"예측({said}): {best['label']} → {yname} {preds[0][1]}")
+
+    varying = [c for c, vs in vals.items() if len(vs) > 1]
+    table = pd.DataFrame({**{short(c): X[:, state["x"].index(c)] for c in vals},
+                          **{f"{r['label']}": np.round(_predict(r, X), 3) for r in rs}})
+    items = [("table", table)]
+    if len(varying) == 1:
+        xi = X[:, state["x"].index(varying[0])]
+        fig = go.Figure(go.Bar(x=[f"{v:g}" for v in xi], y=_predict(best, X), marker_color=COLORS[1],
+                               text=[f"{v:.2f}" for v in _predict(best, X)], textposition="outside"))
+        fig.update_layout(title=f"{short(varying[0])} 값에 따른 예측 {yname} ({best['label']})", xaxis_title=short(varying[0]),
+                          yaxis_title=f"예측 {yname}", height=400, margin=dict(t=50, b=20))
+        items.insert(0, ("fig", fig))
+    pb = _predict(best, X)
+    text_out = (f"### 🔮 경우별 예측 결과 ({len(cases)}가지)\n가장 정확한 모델 **{best['label']}** 기준으로 {yname}는 "
+                f"**{np.nanmin(pb):.3f} ~ {np.nanmax(pb):.3f}** 사이예요. 표에 모델별 예측을 모두 적었어요.\n\n" + "\n".join(f"- {n}" for n in notes))
+    return reply(text_out, items, f"경우별 예측 {len(cases)}가지: {best['label']} → {yname} {np.nanmin(pb):.2f}~{np.nanmax(pb):.2f}")
+
+
+def run_sweep(state, col, lo, hi, vals=None, text=""):
+    """한 변수를 lo~hi로 바꿀 때 예측값이 어떻게 변하는지 그린다 (나머지 변수는 고정)."""
+    notes = []
+    rs = _ensure_models(state, notes)
+    lo, hi = min(lo, hi), max(lo, hi)
+    if lo == hi:
+        return reply("범위의 시작과 끝이 같아요. \"시멘트를 100에서 500까지 바꾸면?\"처럼 말해 주세요.")
+    keep = bool(state.get("inputs")) and (any(w in norm(text) for w in KEEP_WORDS) or not vals)
+    base, kept = _base_row(state, keep)
+    for c, vs in (vals or {}).items():
+        if c != col:
+            base[c] = vs[0]
+    grid = np.linspace(lo, hi, 60)
+    X = np.array([[g if c == col else base[c] for c in state["x"]] for g in grid])
+    fig = go.Figure()
+    for i, r in enumerate(rs[:4]):
+        fig.add_trace(go.Scatter(x=grid, y=_predict(r, X), mode="lines", name=f"{r['label']} (R² {r['test_r2']:.2f})",
+                                 line=dict(color=COLORS[i % len(COLORS)], width=3 if i == 0 else 2, dash=None if i == 0 else "dot")))
+    d = state["df"][col]
+    fig.add_vrect(x0=float(d.min()), x1=float(d.max()), fillcolor="#888", opacity=0.08, line_width=0)
+    yname = short(state["y"])
+    fig.update_layout(title=f"{short(col)}을(를) 바꿀 때 예측 {yname}의 변화", xaxis_title=short(col), yaxis_title=f"예측 {yname}",
+                      height=460, margin=dict(t=50, b=20), legend=dict(orientation="h", y=-0.25))
+    best = rs[0]
+    p = _predict(best, X)
+    idx = [0, 15, 30, 45, 59]
+    table = pd.DataFrame({short(col): np.round(grid[idx], 3), **{r["label"]: np.round(_predict(r, X)[idx], 3) for r in rs[:4]}})
+    change = p[-1] - p[0]
+    peak = grid[int(np.nanargmax(p))]
+    shape = ("계속 커져요" if np.all(np.diff(p) >= -1e-9) else "계속 작아져요" if np.all(np.diff(p) <= 1e-9)
+             else f"{peak:.4g} 근처에서 가장 커요 (직선이 아닌 관계)")
+    fixed = ", ".join(f"{short(c)} {base[c]:.4g}" for c in state["x"] if c != col)[:300]
+    if lo < d.min() or hi > d.max():
+        notes.append(f"⚠️ 회색 영역(학습 데이터 범위 {d.min():g} ~ {d.max():g}) 밖은 예측을 믿기 어려워요.")
+    if fixed:
+        notes.append(f"나머지 변수는 고정했어요: {fixed}")
+    text_out = (f"### 📐 {short(col)} 변화에 따른 {yname}\n{short(col)}을(를) **{lo:g} → {hi:g}**로 바꾸면, **{best['label']}** 기준 예측 {yname}는 "
+                f"**{p[0]:.3f} → {p[-1]:.3f}** ({change:+.3f})로 변하고, {shape}.\n\n" + "\n".join(f"- {n}" for n in notes))
+    return reply(text_out, [("fig", fig), ("table", table)],
+                 f"{short(col)} {lo:g}→{hi:g}일 때 {yname} {p[0]:.2f}→{p[-1]:.2f} ({best['label']})")
+
+
+FUNCS = {"log": np.log, "ln": np.log, "sqrt": np.sqrt, "exp": np.exp, "abs": np.abs, "로그": np.log, "루트": np.sqrt, "제곱근": np.sqrt}
+
+
+def add_variable(state, name, expr):
+    """'물시멘트비 = 물 / 시멘트'처럼 사용자가 정의한 새 변수를 만든다."""
+    df = state["df"]
+    num = numeric_cols(state)
+    expr = expr.replace("^", "**").replace("×", "*").replace("÷", "/").replace("나누기", "/").replace("곱하기", "*").replace("더하기", "+").replace("빼기", "-")
+    env, parts, used = {}, [], []
+    for tok in re.findall(r"\d+\.?\d*|\*\*|[-+*/()]|[가-힣A-Za-z_][\w가-힣]*(?:\s*\([^()]*\))?", expr):
+        if re.fullmatch(r"\d+\.?\d*|\*\*|[-+*/()]", tok):
+            parts.append(tok)
+            continue
+        word = re.sub(r"\s*\(.*\)$", "", tok)
+        if word in FUNCS and tok != word:                   # log(물) 같은 함수
+            inner = [c for _, c in find_cols(tok[len(word):], num)]
+            if len(inner) != 1:
+                return reply(f"⚠️ '{tok}' 안의 변수를 찾지 못했어요.")
+            env[f"v{len(env)}"] = FUNCS[word](df[inner[0]].astype(float))
+            parts.append(f"v{len(env) - 1}")
+            used.append(f"{word}({short(inner[0])})")
+            continue
+        hits = [c for _, c in find_cols(tok, num)]
+        if len(hits) == 1:
+            env[f"v{len(env)}"] = df[hits[0]].astype(float)
+            parts.append(f"v{len(env) - 1}")
+            used.append(short(hits[0]))
+        elif parts and parts[-1] not in "+-*/(**":           # 식이 끝난 뒤의 말("변수 만들어줘")은 무시
+            break
+        else:
+            return reply(f"⚠️ '{tok}'에 해당하는 열을 찾지 못했어요. \"열 목록 보여줘\"로 이름을 확인해 보세요.")
+    code = " ".join(parts)
+    if not env or not re.fullmatch(r"[v\d\s.+\-*/()]+", code):
+        return reply("⚠️ 식을 이해하지 못했어요. 예: \"물시멘트비 = 물 / 시멘트 변수 만들어줘\"")
+    try:
+        with np.errstate(all="ignore"):
+            new = pd.Series(eval(code, {"__builtins__": {}}, env), index=df.index).replace([np.inf, -np.inf], np.nan)   # 숫자·연산자·v0…만 통과한 식
+    except Exception as e:
+        return reply(f"⚠️ 식을 계산하지 못했어요: {e}")
+    name = name.strip()[:30]
+    df[name] = new
+    if name != state["y"] and name not in state["x"]:
+        state["x"] = state["x"] + [name]
+    state.update(results={}, inputs={})
+    remember(f"새 변수 '{name}' 만듦 ({', '.join(used)} 사용)")
+    return reply(f"🧮 새 변수 **{name}**을(를) 만들어 입력 변수(X)에 넣었어요. 평균 {new.mean():.4g}, 범위 {new.min():.4g} ~ {new.max():.4g}.\n\n"
+                 f"- Y: {short(state['y'])}\n- X ({len(state['x'])}개): {', '.join(short(c) for c in state['x'][:12])}\n\n"
+                 "모델을 다시 학습해야 해요. \"전부 비교해줘\"라고 해 보세요.", [("table", df[[name]].describe().T.round(4).reset_index(names="변수"))],
+                 f"새 변수 {name} 생성")
 
 
 def report(state):
