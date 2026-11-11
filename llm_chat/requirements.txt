@@ -1,0 +1,6 @@
+# 오픈소스 LLM 채팅 앱 전용 패키지 목록
+# llama-cpp-python은 PyPI에 소스만 있어서, 공식 CPU용 미리 빌드된 패키지 저장소를 추가로 지정합니다.
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+llama-cpp-python==0.3.36
+huggingface-hub>=0.23
+streamlit>=1.51
