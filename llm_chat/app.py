@@ -22,9 +22,10 @@ from pathlib import Path
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import knowledge as K  # noqa: E402
 import tools as T  # noqa: E402
 
-st.set_page_config(page_title="데이터 분석 챗봇", page_icon="💬", layout="centered")
+st.set_page_config(page_title="오픈소스 LLM 챗봇", page_icon="💬", layout="centered")
 
 # =============================================================
 # 1. 언어모델 목록 (서버 사양: CPU 2코어 · 메모리 약 2.7GB에 맞춰 선정)
@@ -49,34 +50,31 @@ MODELS = {
     },
 }
 
-SYSTEM_PROMPT = """너는 '데이터처리개론' 수업의 데이터 분석 조교 챗봇이다.
-규칙: 반드시 한국어로 짧게 답한다. 모르면 모른다고 말한다. 아래에 없는 숫자는 만들지 않는다.
-
-[수업 핵심 개념]
-- 선형회귀: y=ax+b. 잔차 제곱합을 최소로 하는 a, b를 최소제곱법으로 구한다.
-- 비선형회귀: 다항식·거듭제곱·지수·로그 곡선으로 적합한다.
-- 뉴런: y=φ(Σwx+b). 가중치 w, 편향 b, 활성화 함수 φ(시그모이드, ReLU).
-- 경사하강법: 오차 E=(t-o)²가 줄도록 w ← w - η·∂E/∂w.
-- 오류역전파: 출력의 오차를 거꾸로 전달해 모든 가중치를 고친다(합성함수의 미분법).
-- 정규화: z=(x-μ)/σ 또는 MinMax. 과적합 방지: 학습·검증·테스트 분할.
-- R²는 1에 가까울수록 좋다. 학습 R²가 테스트 R²보다 많이 높으면 과적합이다.
-- 이 챗봇에서 "선형회귀 해줘", "인공신경망 학습해줘"처럼 말하면 분석이 실행된다."""
+SYSTEM_PROMPT = """너는 무엇이든 자유롭게 대화하는 한국어 AI 챗봇이다. 선형회귀, 비선형회귀, 인공신경망, 딥러닝, 오픈소스, LLM 같은 \
+데이터·AI 주제를 특히 잘 설명하지만, 그 밖의 질문에도 성실하게 답한다.
+규칙:
+- 반드시 한국어로, 쉬운 말로 답한다. 먼저 핵심을 한두 문장으로 말하고 필요하면 예시나 식을 덧붙인다.
+- [참고 자료]가 주어지면 그 내용을 바탕으로 답한다. 자료에 없는 것은 아는 만큼 답하되, 확실하지 않으면 확실하지 않다고 말한다.
+- 숫자나 사실을 지어내지 않는다. 분석 결과 숫자는 [분석 상태]에 있는 것만 쓴다.
+- 사용자가 실제 계산을 원하면 "선형회귀 해줘", "인공신경망 학습해줘", "x: 1, 2, 3 / y: 2, 4, 6"처럼 말하면 된다고 알려 준다."""
 
 COMMENT_PROMPT = ("너는 데이터 분석 조교다. 분석 결과를 한국어 두세 문장으로 쉽게 해설한다. "
                   "주어진 숫자만 쓰고 새 숫자를 만들지 않는다. R²는 1에 가까울수록 좋고, "
                   "학습 R²가 테스트 R²보다 많이 높으면 과적합이다.")
 
-WELCOME = """안녕하세요! 저는 **채팅으로만 쓰는 데이터 분석 챗봇**이에요. 버튼 없이 말로 시키면 돼요.
+WELCOME = """안녕하세요! 저는 **오픈소스 LLM으로 만든 AI 챗봇**이에요. ChatGPT처럼 자유롭게 말을 걸면 돼요. 버튼은 없어요.
 
-**이렇게 말해 보세요**
-- "콘크리트 데이터 불러와" (다른 데이터: "데이터 목록 보여줘")
-- 내 데이터 쓰기: 📎로 파일 첨부, 데이터 주소 붙여넣기, 표를 그대로 붙여넣기
-- "선형회귀 해줘" → "비선형회귀 해줘"
-- "인공신경망 학습해줘" → "딥러닝으로 해줘"
-- "전부 비교해줘" → "보고서 만들어줘"
-- "시멘트 300, 물 180, 재령 28일 때 예측해줘"
+**무엇이든 물어보세요**
+- "선형회귀랑 인공신경망은 뭐가 달라?"
+- "딥러닝이 뭐야? 쉽게 설명해줘"
+- "오픈소스 LLM이 뭐고 ChatGPT랑 뭐가 달라?"
 
-수업 개념도 물어보세요. 예: "오류역전파가 뭐야?"
+**말로 시키면 실제로 계산해요** (파일이 없어도 돼요)
+- "x: 1, 2, 3, 4, 5 / y: 2.1, 3.9, 6.2, 8.1, 9.8 선형회귀 해줘"
+- "y = 2x + 3 데이터 만들어서 인공신경망 학습해줘"
+- "콘크리트 데이터로 딥러닝 해줘" → "시멘트 350 물 170이면?"
+- 내 자료: 📎 파일 첨부, 데이터 주소 붙여넣기, 표를 그대로 붙여넣기
+
 더 많은 사용법은 **"도움말"** 이라고 입력하세요."""
 
 HELP = """**채팅으로 할 수 있는 것**
@@ -102,13 +100,16 @@ HELP = """**채팅으로 할 수 있는 것**
 | 기억 | "지난번에 뭐 했지?", "기억 지워줘" |
 | 현재 상태 | "지금 상태 알려줘" |
 | 언어모델 | "엑사원으로 바꿔줘", "모델 정보 알려줘", "서버 사양 알려줘", "LLM 원리 설명해줘", "해설 꺼줘" |
-| 기타 | "대화 지워줘", 수업 개념 질문은 그냥 물어보세요 |"""
+| 데이터 만들기 | "y = 2x + 3 데이터 만들어줘", "y = 3*sin(x) + x 데이터 200개 만들어서 딥러닝 해줘" |
+| 자유 대화 | 아무 질문이나 하세요. "딥러닝이 뭐야?", "오픈소스 LLM의 장단점은?", "파인튜닝이랑 RAG 차이는?" |
+| 기타 | "대화 지워줘" |"""
 
 LOAD = ("불러", "가져", "로드", "열어", "데이터로", "데이터써", "데이터사용", "데이터바꿔", "자료로", "가지고", "쓸래", "쓰자")
 STRONG = ("돌려", "실행", "학습해", "학습시", "훈련", "적합", "그려", "분석해", "해봐", "시켜", "만들어", "비교해")
 GENERIC = ("해줘", "해주", "하자", "해라", "ㄱㄱ", "부탁", "보여")
 EXPLAIN = ("설명", "뭐야", "뭔지", "무엇", "이유", "왜", "차이", "의미", "뜻", "개념", "원리", "어떻게")
-MAX_HISTORY_MESSAGES = 6
+MAX_HISTORY_MESSAGES = 8
+WHY = ("왜", "이유", "원리", "뭐야", "무엇", "뜻", "개념", "뭔지")
 
 
 def has(text, *words):
@@ -385,10 +386,16 @@ def route(text, files):
             return [T.reply(s)], False
         if has(t, "데이터", "자료") and has(t, "목록", "종류", "뭐있", "뭐가있", "어떤데이터", "어떤자료", "리스트", "쓸수있"):
             return [T.dataset_list()], False
-        pasted = T.parse_pasted(text)                   # 채팅창에 직접 적거나 붙여넣은 데이터
+        made = T.make_data(text)                        # "y = 2x + 3 데이터 만들어줘"
+        if made is not None:
+            out.append(T._set_data(an, made[0], made[1]))
+            text = re.sub(r"(?<![a-z0-9_])y\s*=\s*[^,\n가-힣]+", " ", text, count=1, flags=re.I)
+            text = re.sub(r"\d+\s*개", " ", text)
+            t = T.norm(text)
+        pasted = None if made is not None else T.parse_pasted(text)   # 채팅창에 직접 적거나 붙여넣은 데이터
         if pasted is not None:
             out.append(T.load_pasted(an, pasted))
-            text = " ".join(ln for ln in text.splitlines() if not re.search(r"\d", ln))
+            text = " ".join(re.sub(r"^.*\d[\])]?", "", ln) for ln in text.splitlines())   # 숫자 뒤에 붙은 명령만 남김
             t = T.norm(text)
             if not t:
                 return out, False
@@ -424,6 +431,8 @@ def route(text, files):
     if an["df"] is not None and not (intents0 and "예측" not in t):
         vals = T.parse_inputs(an, text)
         sweep = T.parse_sweep(an, text)
+        if sweep and not re.search(r"\d", t) and has(t, *WHY):
+            sweep = None                               # "물이 늘면 왜 약해져?" 같은 질문은 언어모델이 답함
         if sweep:
             rep = T.run_sweep(an, *sweep, vals=vals, text=text)
         elif vals:
@@ -438,7 +447,8 @@ def route(text, files):
 
     # --- 분석 실행 ---
     intents = detect_intents(t, text)
-    run = strong or (generic and not explain_q) or (bool(intents) and len(t) <= 12 and not explain_q)
+    run = ((strong or generic) and not explain_q) or (bool(intents) and len(t) <= 12 and not explain_q)
+    run = run or (strong and has(t, "돌려", "실행", "학습해줘", "학습시켜", "그려"))   # 질문 낱말이 섞여도 분명한 실행 명령
     plot_q = has(t, "산점도", "그래프", "그림", "플롯", "plot", "히스토그램", "분포", "시각화")
     if (not intents and run and not explain_q and not plot_q and not re.search(r"\d", t)
             and has(t, "예측", "맞춰", "추정", "에따른", "에따라", "관계", "영향")):
@@ -513,7 +523,7 @@ def llm_context():
         lines.append(f"- {r['label']}: 테스트 R² {r['test_r2']:.3f}, RMSE {r['rmse']:.2f}, 학습 R² {r['train_r2']:.3f}")
     for m in T.recall_all()[-3:]:
         lines.append(f"- 기록({m['time']}): {m['summary']}")
-    return ("\n\n[지금까지의 분석 상태와 기록]\n" + "\n".join(lines)) if lines else ""
+    return ("\n\n[분석 상태]\n" + "\n".join(lines)) if lines else ""
 
 
 # =============================================================
@@ -525,9 +535,9 @@ ss.setdefault("an", T.new_state())
 ss.setdefault("model_name", DEFAULT_MODEL)
 ss.setdefault("commentary", True)
 
-st.title("💬 데이터 분석 챗봇")
-st.caption("선형회귀 · 비선형회귀 · 인공신경망 · 딥러닝을 채팅으로 실행해요. "
-           "이 서버에 설치한 오픈소스 언어모델이 해설하고 질문에 답해요.")
+st.title("💬 오픈소스 LLM 챗봇")
+st.caption("무엇이든 자유롭게 물어보세요. 선형회귀 · 비선형회귀 · 인공신경망 · 딥러닝은 말로 시키면 실제로 계산해요. "
+           "이 서버에 설치한 오픈소스 언어모델(Qwen2.5)이 답해요.")
 
 
 def render(m, idx):
@@ -600,11 +610,14 @@ if inp:
                                  f"({ss.get('llm_error')})\n\n분석 기능은 그대로 쓸 수 있어요. \"도움말\"이라고 입력해 보세요."), None
                 st.markdown(answer)
             else:
-                history = [{"role": m["role"], "content": m["content"]}
+                history = [{"role": m["role"], "content": m["content"][:700]}
                            for m in ss.messages if m.get("kind") != "tool"][-MAX_HISTORY_MESSAGES:]
-                messages = [{"role": "system", "content": SYSTEM_PROMPT + llm_context()}] + history
+                asked = " ".join(m["content"] for m in history if m["role"] == "user")[-400:]
+                notes = K.search(text) or K.search(asked)          # 질문과 관련된 참고 메모를 찾아 함께 보여 줌 (RAG)
+                ref = ("\n\n[참고 자료]\n" + "\n".join(f"- {n}" for n in notes)) if notes else ""
+                messages = [{"role": "system", "content": SYSTEM_PROMPT + ref + llm_context()}] + history
                 try:
-                    answer, stats = ask_llm(llm, messages, 0.5, 384)
+                    answer, stats = ask_llm(llm, messages, 0.6, 512)
                     st.caption(stats_caption(stats))
                 except Exception as e:
                     answer, stats = f"⚠️ 답변 생성 중 오류가 났어요: {e}", None

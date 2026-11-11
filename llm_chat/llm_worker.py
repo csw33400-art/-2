@@ -26,7 +26,7 @@ def main():
     try:
         from llama_cpp import Llama
 
-        llm = Llama.from_pretrained(repo_id=repo, filename=filename, n_ctx=2048,
+        llm = Llama.from_pretrained(repo_id=repo, filename=filename, n_ctx=4096,
                                     n_threads=threads, n_batch=128, verbose=False)
     except Exception as e:  # 설치 실패, 내려받기 실패 등
         send({"error": f"{type(e).__name__}: {e}"})

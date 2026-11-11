@@ -368,6 +368,36 @@ def parse_pasted(text):
     return None
 
 
+def make_data(text):
+    """'y = 2x + 3 데이터 100개 만들어줘' → 식에 잡음을 더한 연습용 데이터. (표, 이름) 또는 None."""
+    low = str(text).lower()
+    m = re.search(r"(?<![a-z0-9_])y\s*=\s*([^,\n가-힣]+)", low)
+    make = re.search(r"만들|생성", low) and "변수" not in low
+    sample = re.search(r"(가상|예시|임의|랜덤|연습)\s*(용)?\s*(데이터|자료)", low)
+    if not (make and (m and "x" in m.group(1) or sample)):
+        return None
+    expr = (m.group(1).strip() if m else "2*x + 1").replace("^", "**").replace("×", "*")
+    expr = re.sub(r"(\d)\s*(x|\()", r"\1*\2", expr)                 # 2x → 2*x
+    expr = re.sub(r"(\d)\s*(sin|cos|exp|log|sqrt)", r"\1*\2", expr)
+    if not re.fullmatch(r"(?:sin|cos|exp|log|sqrt|x|pi|[\d\s.+\-*/()])+", expr):
+        return None
+    n = re.search(r"(\d+)\s*개", low)
+    n = min(max(int(n.group(1)), 10), 5000) if n else 100
+    rng = np.random.default_rng(SEED)
+    x = np.sort(rng.uniform(0.5, 10, n))
+    try:
+        with np.errstate(all="ignore"):
+            y = eval(expr, {"__builtins__": {}}, {"x": x, "sin": np.sin, "cos": np.cos, "exp": np.exp, "log": np.log,
+                                                  "sqrt": np.sqrt, "pi": np.pi}) * np.ones(n)   # 허용한 글자만 통과한 식
+    except Exception:
+        return None
+    if not np.all(np.isfinite(y)):
+        return None
+    noise = 0.0 if re.search(r"잡음없|노이즈없|오차없", norm(text)) else 0.05 * (np.ptp(y) or 1.0)
+    df = pd.DataFrame({"x": np.round(x, 4), "y": np.round(y + rng.normal(0, noise, n), 4)})
+    return df, f"만든 데이터 (y = {expr.replace('**', '^')}{' + 잡음' if noise else ''}, {n}개)"
+
+
 def load_pasted(state, df):
     return _set_data(state, df, "채팅에 입력한 데이터")
 
@@ -1014,9 +1044,12 @@ def run_predict(state, vals, text=""):
         inp = pd.DataFrame({"변수": [short(c) for c in state["x"]], "입력값": np.round(X[0], 3),
                             "출처": ["입력" if c in vals else "직전 입력" if c in kept else "평균" for c in state["x"]]})
         said = ", ".join(f"{short(c)} {v[0]:g}" for c, v in vals.items())
+        c0 = next(iter(vals))
+        ex = short(c0)
         text_out = (f"### 🔮 예측 결과\n입력: {said}\n\n가장 정확한 모델인 **{best['label']}**의 예측은 **{yname} = {preds[0][1]}**이에요.\n\n"
                     + "\n".join(f"- {n}" for n in notes)
-                    + "\n\n값을 바꿔 보려면 \"물을 200으로 바꾸면?\"처럼, 변화를 보려면 \"시멘트를 100에서 500까지 바꾸면?\"처럼 말하세요.")
+                    + f"\n\n값을 바꿔 보려면 \"{ex}을(를) {d[c0].quantile(0.75):.3g}으로 바꾸면?\"처럼, 변화를 보려면 "
+                      f"\"{ex}을(를) {d[c0].min():.3g}에서 {d[c0].max():.3g}까지 바꾸면?\"처럼 말하세요.")
         return reply(text_out, [("table", table), ("table", inp)], f"예측({said}): {best['label']} → {yname} {preds[0][1]}")
 
     varying = [c for c, vs in vals.items() if len(vs) > 1]
