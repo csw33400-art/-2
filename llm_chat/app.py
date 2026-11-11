@@ -10,10 +10,12 @@
     pip install -r llm_chat/requirements.txt
     streamlit run llm_chat/app.py
 """
-import gc
+import json
 import os
 import re
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -127,36 +129,123 @@ def server_spec():
     return cpus, mem_gb
 
 
-@st.cache_resource(show_spinner=False, max_entries=1)
-def load_model(name):
-    from llama_cpp import Llama
+def cpu_threads():
+    """이 서버가 실제로 쓸 수 있는 CPU 코어 수 (컨테이너 제한을 반영, 최대 4)."""
+    n = os.cpu_count() or 1
+    try:
+        quota, period = open("/sys/fs/cgroup/cpu.max").read().split()[:2]
+        if quota != "max":
+            n = min(n, max(1, round(int(quota) / int(period))))
+    except (OSError, ValueError):
+        pass
+    return max(1, min(n, 4))
 
-    info = MODELS[name]
-    return Llama.from_pretrained(repo_id=info["repo"], filename=info["file"], n_ctx=2048,
-                                 n_threads=max(1, os.cpu_count() or 1), n_batch=256, verbose=False)
+
+SIGNALS = {-9: "메모리 부족으로 강제 종료됨", -4: "이 서버 CPU가 지원하지 않는 명령어", -11: "모델 내부 오류(세그멘테이션 폴트)"}
+
+
+class LLMWorker:
+    """언어모델을 별도 프로세스(llm_worker.py)에서 돌린다.
+
+    모델이 죽어도 웹 앱은 죽지 않고, 한 번에 한 사람의 질문만 처리한다(llama.cpp는 동시 실행 불가).
+    """
+
+    def __init__(self):
+        self.proc, self.name, self.busy = None, None, False
+        self.lock = threading.Lock()
+
+    def _read(self):
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:                                   # 프로세스가 죽었음
+                code = self.proc.poll()
+                self.stop()
+                raise RuntimeError(f"언어모델 프로세스가 멈췄어요 ({SIGNALS.get(code, f'종료 코드 {code}')})")
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue                                   # JSON이 아닌 줄은 무시
+
+    def stop(self):
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+                self.proc.wait(timeout=10)
+            except Exception:
+                pass
+        self.proc, self.name, self.busy = None, None, False
+
+    def ensure(self, name):
+        """name 모델이 준비된 상태로 만든다. 다른 모델이 떠 있으면 먼저 끝내 메모리를 비운다."""
+        if not self.lock.acquire(timeout=180):
+            raise RuntimeError("다른 답변을 만드는 중이에요. 잠시 뒤에 다시 물어봐 주세요.")
+        try:
+            if self.proc is not None and (self.name != name or self.proc.poll() is not None):
+                self.stop()
+            if self.proc is None:
+                info = MODELS[name]
+                worker = str(Path(__file__).resolve().parent / "llm_worker.py")
+                self.proc = subprocess.Popen(
+                    [sys.executable, worker, info["repo"], info["file"], str(cpu_threads())],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1)
+                msg = self._read()
+                if not msg.get("ready"):
+                    self.stop()
+                    raise RuntimeError(msg.get("error", "언어모델을 불러오지 못했어요"))
+                self.name = name
+        finally:
+            self.lock.release()
+
+    def chat(self, messages, temperature, max_tokens):
+        """답을 글자 조각 단위로 내보낸다."""
+        if not self.lock.acquire(timeout=180):
+            raise RuntimeError("다른 답변을 만드는 중이에요. 잠시 뒤에 다시 물어봐 주세요.")
+        try:
+            if self.proc is None or self.proc.poll() is not None:
+                raise RuntimeError("언어모델이 꺼져 있어요. 다시 물어보면 새로 켤게요.")
+            while self.busy:                               # 중간에 끊긴 이전 답변의 남은 글자를 비움
+                if "t" not in self._read():
+                    self.busy = False
+            self.proc.stdin.write(json.dumps({"messages": messages, "temperature": temperature,
+                                              "max_tokens": max_tokens}, ensure_ascii=False) + "\n")
+            self.proc.stdin.flush()
+            self.busy = True
+            while True:
+                msg = self._read()
+                if "t" in msg:
+                    yield msg["t"]
+                    continue
+                self.busy = False
+                if "error" in msg:
+                    raise RuntimeError(msg["error"])
+                return
+        except (BrokenPipeError, OSError) as e:
+            self.stop()
+            raise RuntimeError(f"언어모델 프로세스와 연결이 끊겼어요 ({e})")
+        finally:
+            self.lock.release()
+
+
+@st.cache_resource(show_spinner=False)
+def worker():
+    return LLMWorker()
 
 
 def get_llm():
-    """언어모델을 돌려준다. 처음 쓸 때 내려받아 불러오고, 실패하면 None (분석 기능은 계속 동작)."""
+    """준비된 언어모델 작업자를 돌려준다. 실패하면 None (분석 기능은 계속 동작)."""
     ss = st.session_state
-    if ss.get("llm_error"):
-        return None
-    if ss.get("loaded_model") not in (None, ss.model_name):   # 모델을 바꿀 때는 이전 모델을 메모리에서 먼저 지움
-        load_model.clear()
-        gc.collect()
-        ss.loaded_model = None
+    w = worker()
     try:
-        if ss.get("loaded_model") != ss.model_name:
-            with st.spinner(f"언어모델 '{ss.model_name}' 준비 중… (처음 한 번은 내려받느라 1~2분 걸려요)"):
-                llm = load_model(ss.model_name)
-        else:
-            llm = load_model(ss.model_name)
-        ss.loaded_model = ss.model_name
-        return llm
+        if w.name == ss.model_name and w.proc is not None and w.proc.poll() is None:
+            return w
+        with st.spinner(f"언어모델 '{ss.model_name}' 준비 중… (처음 한 번은 내려받느라 1~2분 걸려요)"):
+            w.ensure(ss.model_name)
+        ss.llm_error = None
+        return w
     except Exception as e:  # 설치 실패, 내려받기 실패, 메모리 부족 등
         if ss.model_name != DEFAULT_MODEL:
             st.warning(f"'{ss.model_name}' 모델을 불러오지 못해서 기본 모델로 되돌려요. ({e})")
-            ss.model_name, ss.loaded_model = DEFAULT_MODEL, None
+            ss.model_name = DEFAULT_MODEL
             return get_llm()
         ss.llm_error = str(e)
         return None
@@ -165,14 +254,11 @@ def get_llm():
 def stream_answer(llm, messages, temperature, max_tokens, stats):
     t0 = time.perf_counter()
     first, n_tokens = None, 0
-    for chunk in llm.create_chat_completion(messages=messages, stream=True, temperature=temperature,
-                                            top_p=0.9, repeat_penalty=1.1, max_tokens=max_tokens):
-        text = chunk["choices"][0].get("delta", {}).get("content")
-        if text:
-            if first is None:
-                first = time.perf_counter() - t0
-            n_tokens += 1
-            yield text
+    for text in llm.chat(messages, temperature, max_tokens):
+        if first is None:
+            first = time.perf_counter() - t0
+        n_tokens += 1
+        yield text
     total = time.perf_counter() - t0
     gen_time = max(total - (first or 0), 1e-6)
     stats.update(tokens=n_tokens, total=total, first=first or total, model=st.session_state.model_name,

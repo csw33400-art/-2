@@ -65,6 +65,7 @@ streamlit run app.py
 ├── llm_chat/
 │   ├── app.py             # 채팅 전용 데이터 분석 챗봇 (별도 Streamlit 앱)
 │   ├── tools.py           # 채팅으로 실행하는 분석 도구 (회귀·신경망·예측·보고서)
+│   ├── llm_worker.py      # 언어모델을 별도 프로세스로 실행 (모델이 멈춰도 웹 앱은 유지)
 │   ├── requirements.txt   # 채팅 앱 전용 패키지 (llama-cpp-python 등)
 │   └── README.md          # 모델 선정 이유와 구성
 ├── data/
