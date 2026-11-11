@@ -3,10 +3,13 @@
 app.py의 채팅창이 사용자의 말을 해석해서 이 파일의 함수를 실행합니다.
 모든 함수는 {"text": 설명글, "items": [("fig", 그래프) | ("table", 표)], "summary": 한 줄 요약}을 돌려줍니다.
 """
+import difflib
 import io
 import json
 import re
 import tempfile
+import urllib.parse
+import urllib.request
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +19,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from scipy.optimize import curve_fit
 from sklearn.compose import TransformedTargetRegressor
-from sklearn.datasets import load_diabetes
+from sklearn.datasets import fetch_california_housing, load_diabetes, load_iris, load_wine
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
@@ -29,11 +32,49 @@ MEMORY_FILE = Path(tempfile.gettempdir()) / "llm_chat_memory.json"
 SEED = 42
 COLORS = ["#EF553B", "#636EFA", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3"]
 
+SEABORN = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/"
 DATASETS = {
-    "concrete": {"label": "콘크리트 압축강도 (UCI 공개 데이터, 1,030행)", "words": ("콘크리트", "concrete")},
-    "diabetes": {"label": "당뇨병 진행도 (scikit-learn 공개 데이터, 442행)", "words": ("당뇨", "diabetes")},
-    "synthetic": {"label": "비선형 합성 데이터 (150행)", "words": ("합성", "synthetic")},
+    "concrete": {"label": "콘크리트 압축강도 (UCI 공개 데이터)", "words": ("콘크리트", "concrete"), "y": "압축강도(MPa)"},
+    "diabetes": {"label": "당뇨병 진행도 (scikit-learn 공개 데이터)", "words": ("당뇨", "diabetes"), "y": "target"},
+    "mpg": {"label": "자동차 연비 (Auto MPG 공개 데이터)", "words": ("연비", "자동차", "mpg"), "y": "mpg", "url": SEABORN + "mpg.csv"},
+    "tips": {"label": "식당 팁 (tips 공개 데이터)", "words": ("팁", "tips", "식당"), "y": "tip", "url": SEABORN + "tips.csv"},
+    "penguins": {"label": "펭귄 신체 측정 (Palmer Penguins 공개 데이터)", "words": ("펭귄", "penguin"), "y": "body_mass_g",
+                 "url": SEABORN + "penguins.csv"},
+    "california": {"label": "캘리포니아 집값 (scikit-learn 공개 데이터)", "words": ("캘리포니아", "집값", "주택", "california", "housing"),
+                   "y": "MedHouseVal"},
+    "iris": {"label": "붓꽃 크기 (Iris 공개 데이터)", "words": ("붓꽃", "아이리스", "iris"), "y": "petal width (cm)"},
+    "wine": {"label": "와인 성분 (Wine 공개 데이터)", "words": ("와인", "wine"), "y": "alcohol"},
+    "synthetic": {"label": "비선형 합성 데이터", "words": ("합성", "synthetic"), "y": "y"},
 }
+MAX_ROWS = 20000          # 작은 서버라서 이보다 큰 데이터는 무작위로 줄여서 씀
+
+# 사용자가 한국어로 말해도 영어 열 이름을 찾도록 하는 낱말 사전 (반대 방향도 사용)
+ALIASES = {
+    "나이": ("age",), "연령": ("age",), "키": ("height",), "신장": ("height",), "몸무게": ("weight", "mass"), "체중": ("weight", "mass"),
+    "무게": ("weight", "mass"), "질량": ("mass", "weight"), "가격": ("price", "cost", "charges", "val"), "비용": ("cost", "charges", "price"),
+    "집값": ("medhouseval", "price"), "소득": ("income", "medinc"), "수입": ("income",), "연봉": ("salary", "income"), "월급": ("salary",),
+    "온도": ("temp",), "기온": ("temp",), "습도": ("humid",), "압력": ("press",), "속도": ("speed", "velocity"), "속력": ("speed",),
+    "시간": ("time", "hour"), "거리": ("dist",), "길이": ("length",), "너비": ("width",), "폭": ("width",), "높이": ("height",),
+    "면적": ("area",), "넓이": ("area",), "부피": ("volume",), "연비": ("mpg",), "마력": ("horsepower", "hp"), "배기량": ("displacement",),
+    "실린더": ("cylinder",), "기통": ("cylinder",), "가속": ("accel",), "연식": ("model_year", "year"), "연도": ("year",), "년도": ("year",),
+    "팁": ("tip",), "계산서": ("total_bill", "bill"), "금액": ("total_bill", "amount", "price"), "총액": ("total",), "인원": ("size",),
+    "성별": ("sex", "gender"), "흡연": ("smok",), "요일": ("day",), "날짜": ("date",), "점수": ("score",), "성적": ("score", "grade"),
+    "매출": ("sales", "revenue"), "판매": ("sales",), "수량": ("quantity", "qty", "count"), "개수": ("count",), "인구": ("popul",),
+    "방": ("room",), "침실": ("bedrm", "bedroom"), "위도": ("latitude",), "경도": ("longitude",), "강도": ("strength",),
+    "혈압": ("bp", "pressure"), "혈당": ("glucose",), "부리": ("bill",), "날개": ("flipper",), "꽃잎": ("petal",), "꽃받침": ("sepal",),
+    "알코올": ("alcohol",), "도수": ("alcohol",), "산도": ("acid", "ph"), "색": ("color",), "밀도": ("density",), "농도": ("concentration",),
+    "전압": ("volt",), "전류": ("current",), "전력": ("power",), "출력": ("power", "output"), "하중": ("load",), "응력": ("stress",),
+    "변형": ("strain",), "깊이": ("depth",), "두께": ("thick",), "지름": ("diam",), "직경": ("diam",), "각도": ("angle",),
+    "주행": ("mileage", "odometer"), "평수": ("area",), "층": ("floor",), "목표": ("target",), "결과": ("target", "result", "output"),
+}
+PARTICLES = ("으로", "이랑", "하고", "에서", "일때", "로", "랑", "와", "과", "은", "는", "이", "가", "을", "를", "의", "도", "만", "에")
+STOPWORDS = {
+    "데이터", "자료", "회귀", "선형", "비선형", "신경망", "인공", "딥러닝", "모델", "학습", "예측", "분석", "결과", "비교", "그래프", "변수",
+    "입력", "전부", "모든", "모두", "다시", "이번", "그리고", "에포크", "은닉층", "학습률", "다항", "평균", "최대", "최소", "표준편차",
+    "산점도", "히스토그램", "분포", "관계", "영향", "파일", "목록", "설명", "사용", "이용", "값", "the", "and", "for", "with", "data",
+    "linear", "regression", "model", "run", "plot", "show", "mean", "max", "min", "std", "ann", "mlp", "deep", "relu", "tanh",
+}
+Y_HINTS = ("target", "label", "price", "output", "result", "score", "가격", "강도", "결과", "목표", "점수", "매출")
 
 
 def new_state():
@@ -88,7 +129,7 @@ def recall():
 
 
 # =============================================================
-# 2. 데이터 불러오기와 변수 설정
+# 2. 데이터 불러오기: 어떤 표 데이터든 숫자 분석이 가능하게 정리
 # =============================================================
 def match_dataset(t):
     for key, d in DATASETS.items():
@@ -97,78 +138,323 @@ def match_dataset(t):
     return None
 
 
-def _set_data(state, df, name, key=None):
+def dataset_list():
+    rows = [(d["label"], f"\"{d['words'][0]} 데이터 불러와\"") for d in DATASETS.values()]
+    return reply("**바로 쓸 수 있는 공개 데이터**예요. 이 밖에도 아래 방법으로 아무 데이터나 쓸 수 있어요.\n\n"
+                 "- 입력창의 📎로 파일 첨부 (CSV, Excel, TSV, TXT, JSON)\n"
+                 "- 데이터 주소 붙여넣기 (CSV·Excel 링크, 구글 스프레드시트 공유 링크, GitHub 파일 링크)\n"
+                 "- 채팅창에 표를 그대로 붙여넣기, 또는 `x: 1, 2, 3, 4 / y: 2.1, 3.9, 6.2, 8.1`처럼 직접 입력",
+                 [("table", pd.DataFrame(rows, columns=["데이터", "이렇게 말하세요"]))])
+
+
+def _clean(df):
+    """아무 표나 분석할 수 있게 정리한다. (정리한 표, 안내 문장 목록)"""
+    notes = []
+    df = df.copy()
+    df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
+    df = df.loc[:, ~pd.Index(df.columns).duplicated()].dropna(axis=1, how="all").dropna(axis=0, how="all")
+    for c in [c for c in df.columns if c.lower().startswith("unnamed")]:
+        v = pd.to_numeric(df[c], errors="coerce")
+        if v.notna().all() and (v.diff().dropna() == 1).all():      # 0,1,2,… 순번 열은 버림
+            df = df.drop(columns=c)
+    if len(df) > MAX_ROWS:
+        notes.append(f"행이 {len(df):,}개라서 무작위로 {MAX_ROWS:,}행만 골라 써요.")
+        df = df.sample(MAX_ROWS, random_state=SEED)
+    df = df.reset_index(drop=True)
+    converted, encoded, ignored = [], [], []
+    for c in list(df.columns):
+        col = df[c]
+        if col.dtype == bool:
+            df[c] = col.astype(int)
+            continue
+        if pd.api.types.is_numeric_dtype(col):
+            continue
+        if pd.api.types.is_datetime64_any_dtype(col):
+            ignored.append(c)
+            continue
+        txt = col.astype(str).str.strip()
+        as_num = pd.to_numeric(txt.str.replace(r"[,\s%$₩원]", "", regex=True), errors="coerce")
+        filled = col.notna().sum()
+        if filled and as_num.notna().sum() >= 0.9 * filled:          # "1,234"·"12%"처럼 글자로 저장된 숫자
+            df[c] = as_num
+            converted.append(c)
+            continue
+        cats = sorted(col.dropna().astype(str).str.strip().unique())
+        if 2 <= len(cats) <= 8 and len(cats) < max(3, len(df) // 2):   # 범주(글자) → 0/1 숫자 열
+            for v in cats[1:]:
+                df[f"{c}={v}"] = (txt == v).astype(float).where(col.notna())
+            encoded.append(f"{c}({', '.join(cats)})")
+        else:
+            ignored.append(c)
+    if converted:
+        notes.append(f"글자로 저장된 숫자 열을 숫자로 바꿨어요: {', '.join(converted)}")
+    if encoded:
+        notes.append(f"글자 범주 열은 0/1 숫자 열로 바꿔 분석에 쓸 수 있게 했어요: {'; '.join(encoded)}")
+    if ignored:
+        notes.append(f"숫자로 바꿀 수 없는 열은 분석에서 빼요: {', '.join(ignored[:8])}")
+    n_missing = int(df.select_dtypes(include=[np.number]).isna().sum().sum())
+    if n_missing:
+        notes.append(f"빈칸(결측치)이 {n_missing:,}개 있어요. 입력 변수의 빈칸은 중앙값으로 채우고, Y가 빈 행은 빼고 학습해요.")
+    return df, notes
+
+
+def numeric_cols(state):
+    return state["df"].select_dtypes(include=[np.number]).columns.tolist()
+
+
+def _guess_y(df, num):
+    plain = [c for c in num if "=" not in c] or num
+    for c in plain:
+        if norm(short(c)) in ("y", "target", "label", "output"):
+            return c
+    for c in reversed(plain):
+        if any(h in norm(c) for h in Y_HINTS):
+            return c
+    return plain[-1]
+
+
+def _set_data(state, df, name, key=None, y=None):
+    try:
+        df, notes = _clean(df)
+    except Exception as e:
+        return reply(f"⚠️ '{name}' 데이터를 정리하지 못했어요: {e}")
     num = df.select_dtypes(include=[np.number]).columns.tolist()
-    if len(num) < 2:
-        return reply(f"⚠️ '{name}'에는 숫자형 열이 2개 이상 있어야 해요. (X 1개 이상 + Y 1개)")
-    state.update(df=df, name=name, key=key, y=num[-1], x=num[:-1], results={})
+    num = [c for c in num if df[c].nunique(dropna=True) > 1]
+    if len(num) < 2 or len(df) < 3:
+        return reply(f"⚠️ '{name}'에서 분석할 수 있는 숫자 열을 2개 이상 찾지 못했어요. (X 1개 이상 + Y 1개, 3행 이상 필요)\n\n"
+                     f"읽은 열: {', '.join(map(str, df.columns[:15]))}")
+    y = y if y in num else _guess_y(df, num)
+    state.update(df=df, name=name, key=key, y=y, x=[c for c in num if c != y], results={})
     remember(f"데이터 '{name}' 불러옴 ({len(df):,}행)")
+    xs = ", ".join(short(c) for c in state["x"][:12]) + (f" 외 {len(state['x']) - 12}개" if len(state["x"]) > 12 else "")
+    note = ("\n\n" + "\n".join(f"- ℹ️ {n}" for n in notes)) if notes else ""
     return reply(
         f"📂 **{name}** 데이터를 불러왔어요. {len(df):,}행 × {df.shape[1]}열이에요.\n\n"
-        f"- 예측할 값(Y): **{short(state['y'])}**\n- 입력 변수(X): {', '.join(short(c) for c in state['x'])}\n\n"
-        "바꾸려면 \"Y는 ○○, X는 △△\"처럼 말하세요. 이제 \"선형회귀 해줘\"처럼 시켜 보세요.",
+        f"- 예측할 값(Y): **{short(y)}**\n- 입력 변수(X, {len(state['x'])}개): {xs}{note}\n\n"
+        "바꾸려면 \"Y는 ○○, X는 △△\" 또는 \"○○로 △△ 예측해줘\"처럼 말하세요. 이제 \"선형회귀 해줘\"처럼 시켜 보세요.",
         [("table", df.head(5))],
-        f"데이터 {name} {len(df)}행, Y={short(state['y'])}")
+        f"데이터 {name} {len(df)}행, Y={short(y)}")
 
 
 def load_dataset(state, key):
-    if key == "concrete":
-        df = pd.read_csv(DATA_DIR / "concrete.csv")
-    elif key == "diabetes":
-        df = load_diabetes(as_frame=True).frame
-    else:
-        rng = np.random.default_rng(0)
-        x = np.linspace(0.5, 10, 150)
-        df = pd.DataFrame({"x": x, "y": 3 * np.sin(x) + 0.8 * x + 5 + rng.normal(0, 0.6, len(x))})
-    return _set_data(state, df, DATASETS[key]["label"], key)
+    d = DATASETS[key]
+    try:
+        if key == "concrete":
+            df = pd.read_csv(DATA_DIR / "concrete.csv")
+        elif key == "diabetes":
+            df = load_diabetes(as_frame=True).frame
+        elif key == "iris":
+            df = load_iris(as_frame=True).frame.drop(columns="target")
+        elif key == "wine":
+            df = load_wine(as_frame=True).frame.drop(columns="target")
+        elif key == "california":
+            df = fetch_california_housing(as_frame=True).frame
+        elif key == "synthetic":
+            rng = np.random.default_rng(0)
+            x = np.linspace(0.5, 10, 150)
+            df = pd.DataFrame({"x": x, "y": 3 * np.sin(x) + 0.8 * x + 5 + rng.normal(0, 0.6, len(x))})
+        else:
+            df = pd.read_csv(d["url"])
+    except Exception as e:
+        return reply(f"⚠️ '{d['label']}' 데이터를 내려받지 못했어요: {e}\n\n\"데이터 목록\"이라고 하면 다른 데이터를 볼 수 있어요.")
+    return _set_data(state, df, d["label"], key, d.get("y"))
+
+
+def read_table(raw, name=""):
+    """파일 내용(바이트)을 표로 읽는다. CSV·TSV·TXT·Excel·JSON, 한글 인코딩과 구분자를 자동으로 맞춘다."""
+    low = name.lower()
+    if low.endswith((".xlsx", ".xls")) or raw[:2] == b"PK" or raw[:4] == b"\xd0\xcf\x11\xe0":
+        return pd.read_excel(io.BytesIO(raw))
+    if raw.lstrip()[:15].lower().startswith((b"<!doctype", b"<html")):
+        raise ValueError("데이터 파일이 아니라 웹 페이지예요. CSV나 Excel 파일로 바로 연결되는 주소가 필요해요.")
+    text = None
+    for enc in ("utf-8-sig", "cp949", "utf-16", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    if low.endswith(".json") or text.lstrip()[:1] in ("[", "{"):
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                inner = [v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict)]
+                data = inner[0] if inner else data
+            return pd.json_normalize(data) if isinstance(data, list) else pd.DataFrame(data)
+        except ValueError:
+            pass
+    df = pd.read_csv(io.StringIO(text), sep=None, engine="python")
+    if df.shape[1] == 1:                                    # 구분자를 못 찾았으면 공백으로 다시 시도
+        alt = pd.read_csv(io.StringIO(text), sep=r"\s+", engine="python")
+        df = alt if alt.shape[1] > 1 else df
+    if all(re.fullmatch(r"-?\d+(\.\d+)?", str(c).strip()) for c in df.columns):   # 첫 줄이 제목이 아니라 숫자인 파일
+        df = pd.read_csv(io.StringIO(text), sep=None, engine="python", header=None)
+        df.columns = [f"x{i + 1}" for i in range(df.shape[1] - 1)] + ["y"]
+    return df
+
+
+def _direct_url(url):
+    """공유 링크를 파일로 바로 받을 수 있는 주소로 바꾼다."""
+    m = re.search(r"docs\.google\.com/spreadsheets/d/([\w-]+)", url)
+    if m:
+        gid = re.search(r"gid=(\d+)", url)
+        return f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=csv" + (f"&gid={gid.group(1)}" if gid else "")
+    m = re.match(r"https?://github\.com/([^/]+/[^/]+)/blob/(.+)", url)
+    if m:
+        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}"
+    if "dropbox.com" in url:
+        return re.sub(r"dl=0", "dl=1", url)
+    return url
 
 
 def load_url(state, url):
     try:
-        df = pd.read_excel(url) if re.search(r"\.xlsx?($|\?)", url.lower()) else pd.read_csv(url)
+        host = urllib.parse.urlparse(url).hostname or ""
+        if host in ("localhost",) or re.match(r"^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)", host):
+            raise ValueError("내부 주소는 열 수 없어요.")
+        req = urllib.request.Request(_direct_url(url), headers={"User-Agent": "Mozilla/5.0 (data-chatbot)"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = r.read(30 * 1024 * 1024)
+        df = read_table(raw, url.split("?")[0])
     except Exception as e:
-        return reply(f"⚠️ 주소에서 데이터를 읽지 못했어요: {e}\n\nCSV나 Excel 파일로 바로 연결되는 주소인지 확인해 주세요.")
-    return _set_data(state, df, url.split("/")[-1][:40] or "웹 데이터")
+        return reply(f"⚠️ 주소에서 데이터를 읽지 못했어요: {e}\n\nCSV·Excel 파일 주소나 '링크가 있는 모든 사용자'에게 공개된 구글 스프레드시트 주소인지 확인해 주세요.")
+    name = "구글 스프레드시트" if "docs.google.com" in url else (url.split("?")[0].rstrip("/").split("/")[-1][:40] or "웹 데이터")
+    return _set_data(state, df, name)
 
 
 def load_file(state, f):
     try:
-        raw = f.getvalue()
-        if f.name.lower().endswith(".csv"):
-            df = None
-            for enc in ("utf-8-sig", "cp949", "latin-1"):
-                try:
-                    df = pd.read_csv(io.BytesIO(raw), encoding=enc)
-                    break
-                except UnicodeDecodeError:
-                    continue
-        else:
-            df = pd.read_excel(io.BytesIO(raw))
+        df = read_table(f.getvalue(), f.name)
     except Exception as e:
         return reply(f"⚠️ 파일을 읽지 못했어요: {e}")
     return _set_data(state, df, f.name)
 
 
-def find_cols(text, cols):
-    """문장에 나온 열 이름을 나온 순서대로 찾는다. (위치, 열) 목록."""
+NUM = r"-?\d+(?:\.\d+)?(?:e-?\d+)?"
+
+
+def parse_pasted(text):
+    """채팅창에 직접 적거나 붙여넣은 데이터를 표로 바꾼다. 데이터가 아니면 None."""
+    # (1) "x: 1, 2, 3 / y: 2, 4, 6" 형태
+    named = re.findall(rf"([A-Za-z가-힣_][\w가-힣()%/ ]{{0,20}}?)\s*[:=]\s*[\[(]?\s*({NUM}(?:\s*[,\s]\s*{NUM}){{2,}})", text)
+    if len(named) >= 2:
+        cols = {n.strip(): [float(v) for v in re.findall(NUM, vals)] for n, vals in named}
+        if len(cols) >= 2 and len({len(v) for v in cols.values()}) == 1:
+            return pd.DataFrame(cols)
+    # (2) 여러 줄 표 (엑셀에서 복사한 탭 구분, 쉼표, 공백, | 구분)
+    lines = [ln.strip().strip("|").strip() for ln in text.splitlines() if ln.strip() and not re.fullmatch(r"[\s|:\-]+", ln)]
+    if len(lines) >= 3:
+        def is_num(c):
+            return bool(re.fullmatch(NUM, c.strip().replace(",", "")))
+
+        for sep in ("\t", ",", ";", "|", r"\s+"):
+            parts = [[c for c in re.split(sep if sep == r"\s+" else re.escape(sep), ln)] for ln in lines]
+            rows = [i for i, p in enumerate(parts) if len(p) >= 2 and sum(map(is_num, p)) >= 0.6 * len(p)]   # 숫자로 된 줄
+            if len(rows) < 2:
+                continue
+            width = max({len(parts[i]) for i in rows}, key=[len(parts[i]) for i in rows].count)
+            rows = [i for i in rows if len(parts[i]) == width]
+            if len(rows) < 2 or rows[-1] - rows[0] + 1 != len(rows):          # 숫자 줄이 끊기지 않고 이어져야 함
+                continue
+            first = rows[0]
+            if first > 0 and len(parts[first - 1]) == width and not any(map(is_num, parts[first - 1])):
+                first -= 1                                                   # 바로 윗줄이 열 이름
+            if rows[-1] - first + 1 < 3:
+                continue
+            names = ([c.strip() for c in parts[first]] if first < rows[0]
+                     else [f"x{i + 1}" for i in range(width - 1)] + ["y"])
+            body = [[c.strip() for c in parts[i]] for i in rows]
+            return pd.DataFrame(body, columns=names)       # 숫자 변환은 _clean이 맡음
+    return None
+
+
+def load_pasted(state, df):
+    return _set_data(state, df, "채팅에 입력한 데이터")
+
+
+# =============================================================
+# 2-1. 변수 인식: 정확한 이름, 일부만 말한 이름, 한국어↔영어, 오타, 순서(첫 번째 열)
+# =============================================================
+def _keys(col):
+    n = norm(short(col))
+    return n, re.sub(r"[_\-./=]", "", n)
+
+
+def _token_match(tok, col):
+    """사용자가 말한 낱말 tok이 열 col을 가리키는지."""
+    key, flat = _keys(col)
+    if not key:
+        return False
+    if (len(tok) >= (3 if tok.isascii() else 2)) and (tok in key or tok in flat):
+        return True
+    for ko, ens in ALIASES.items():
+        if tok == ko and any(e in key or e in flat for e in ens):       # 한국어로 말함 → 영어 열
+            return True
+        if tok.isascii() and len(tok) >= 3 and any(e.startswith(tok) or tok.startswith(e) for e in ens) and ko in key:
+            return True                                                 # 영어로 말함 → 한국어 열
+    if tok.isascii() and len(tok) >= 4:
+        parts = [p for p in re.split(r"[^a-z0-9]+", norm(short(col))) if p] + [flat]
+        return bool(difflib.get_close_matches(tok, parts, n=1, cutoff=0.82))   # 오타
+    return False
+
+
+def _find(text, cols):
+    """문장에서 열을 찾는다. (시작 위치, 끝 위치, 열) 목록. 위치는 공백을 뺀 문장 기준."""
+    low = str(text).lower()
     t = norm(text)
-    found = []
-    for c in cols:
-        s = norm(short(c))
-        if not s:
+    found, used = {}, []
+
+    def npos(i):
+        return len(norm(low[:i]))
+
+    # 1단계: 열 이름이 그대로 나온 경우 (긴 이름부터)
+    for c in sorted(cols, key=lambda c: -len(_keys(c)[0])):
+        key, _ = _keys(c)
+        if not key:
             continue
-        if s.isascii():   # 영문 이름(x, y, age 등)은 다른 단어 속에 섞이지 않게 단어 경계가 있을 때만
-            m = re.search(rf"(?<![a-z0-9]){re.escape(s)}(?![a-z0-9])", str(text).lower())
-            pos = len(norm(str(text)[:m.start()])) if m else -1
+        if key.isascii():
+            pat = r"[\s_\-]*".join(re.escape(ch) for ch in key)
+            m = re.search(rf"(?<![a-z0-9]){pat}(?![a-z0-9])", low)
+            span = (npos(m.start()), npos(m.end())) if m else None
         else:
-            pos = t.find(s)
-        if pos >= 0:
-            found.append((pos, c))
-    return sorted(found)
+            i = t.find(key)
+            span = (i, i + len(key)) if i >= 0 else None
+        if span and not any(s < span[1] and span[0] < e for s, e in used):
+            found[c] = span
+            used.append(span)
+    # 2단계: 일부만 말했거나, 다른 언어로 말했거나, 오타가 있는 경우
+    for m in re.finditer(r"[가-힣]+|[a-z][a-z0-9_]*", low):
+        span = (npos(m.start()), npos(m.end()))
+        if any(s < span[1] and span[0] < e for s, e in used):
+            continue
+        tok = m.group()
+        variants = [tok] + [tok[:-len(p)] for p in PARTICLES if tok.endswith(p) and len(tok) > len(p)]
+        for v in variants:
+            if v in STOPWORDS or len(v) < (3 if v.isascii() else 1) or (len(v) == 1 and v not in ALIASES):
+                continue
+            hits = [c for c in cols if c not in found and _token_match(v, c)]
+            if 1 <= len(hits) <= 6:
+                for c in hits:
+                    found[c] = (span[0], span[0] + len(v))
+                break
+    # 3단계: "첫 번째 열", "3번째 변수", "마지막 열"
+    for m in re.finditer(r"(첫|두|세|네|다섯|\d+)번째(?:열|변수|컬럼|칸)|(마지막|끝)(?:열|변수|컬럼|칸)", t):
+        idx = -1 if m.group(2) else {"첫": 0, "두": 1, "세": 2, "네": 3, "다섯": 4}.get(m.group(1), None)
+        idx = int(m.group(1)) - 1 if idx is None else idx
+        if -1 <= idx < len(cols) and cols[idx] not in found:
+            found[cols[idx]] = (m.start(), m.end())
+    return sorted((s, e, c) for c, (s, e) in found.items())
 
 
-X_MARK = ("x는", "x은", "x를", "x=", "x축", "x로", "독립변수", "입력변수", "입력은", "입력으로")
-Y_MARK = ("y는", "y은", "y를", "y=", "y축", "y로", "종속변수", "목표변수", "출력변수", "출력은", "예측대상", "타깃", "타겟")
+def find_cols(text, cols):
+    """문장에 나온 열을 나온 순서대로 찾는다. (위치, 열) 목록."""
+    return [(s, c) for s, _, c in _find(text, cols)]
+
+
+X_MARK = ("x는", "x은", "x를", "x=", "x축", "x로", "독립변수", "입력변수", "입력은", "입력으로", "설명변수")
+Y_MARK = ("y는", "y은", "y를", "y=", "y축", "y로", "종속변수", "목표변수", "출력변수", "출력은", "예측대상", "타깃", "타겟", "반응변수")
+EXCLUDE = ("빼고", "제외", "없이", "말고", "빼줘", "빼")
+RELATION = ("예측", "맞춰", "추정", "에따른", "에따라", "관계", "영향", "설명")
 
 
 def has_var_marker(t):
@@ -179,34 +465,134 @@ def parse_vars(state, text):
     """문장에서 X·Y 변수 지정을 읽어 반영한다. 바뀌었으면 안내 문장을, 아니면 None을 돌려준다."""
     if state["df"] is None:
         return None
-    num = state["df"].select_dtypes(include=[np.number]).columns.tolist()
+    num = [c for c in numeric_cols(state) if state["df"][c].nunique(dropna=True) > 1]
     t = norm(text)
-    mentioned = find_cols(text, num)
+    found = _find(text, num)
+    if {"x", "y"} <= {norm(short(c)) for c in num}:           # 열 이름이 x, y인 데이터에서 "x는", "y는"은 표시어가 아님
+        marks = []
+    else:
+        marks = sorted([(t.find(m), "x") for m in X_MARK if m in t] + [(t.find(m), "y") for m in Y_MARK if m in t])
     new_x, new_y = list(state["x"]), state["y"]
 
-    marks = sorted([(t.find(m), "x") for m in X_MARK if m in t] + [(t.find(m), "y") for m in Y_MARK if m in t])
+    # "물 빼고", "재령이랑 물 제외" → X에서 제외
+    excluded = []
+    for w in EXCLUDE:
+        for m in re.finditer(w, t):
+            edge, last = m.start(), None
+            for s, e, c in sorted(found, reverse=True):
+                if (e <= edge and edge - e <= 4) or (s, e) == last:
+                    if c not in excluded:
+                        excluded.append(c)
+                    edge, last = s, (s, e)
+    found = [f for f in found if f[2] not in excluded]
+
     if marks:
         xs, ys = [], []
-        for pos, col in mentioned:
-            before = [k for p, k in marks if p <= pos]
+        for s, _, col in found:
+            before = [k for p, k in marks if p <= s]
             if before:
                 (xs if before[-1] == "x" else ys).append(col)
         if ys:
             new_y = ys[0]
         if xs:
             new_x = xs
-    elif mentioned:
-        cand = [c for _, c in mentioned if c != new_y]
+    elif found and any(w in t for w in RELATION):
+        # "마력으로 연비 예측", "무게에 따른 연비", "키와 몸무게의 관계" → 마지막에 말한 것이 Y
+        cut = min([t.find(w) for w in ("예측", "맞춰", "추정") if w in t] or [len(t)])
+        before = [f for f in found if f[0] < cut] or found
+        as_x = [c for s, e, c in before if t[e:e + 2] == "으로" or t[e:e + 1] == "로"]
+        rest = [c for _, _, c in before if c not in as_x]
+        if rest and (len(before) >= 2 or not as_x):
+            new_y = rest[-1]
+            others = [c for _, _, c in found if c != new_y]
+            new_x = others or [c for c in num if c != new_y]
+        elif as_x:
+            new_x = as_x
+    elif found:
+        cand = [c for _, _, c in found if c != new_y]
         if cand:
             new_x = cand
-    if any(w in t for w in ("모든변수", "전체변수", "전부다", "변수전부", "변수전체", "변수다", "모든입력")):
+    if any(w in t for w in ("모든변수", "전체변수", "전부다", "변수전부", "변수전체", "변수다", "모든입력", "나머지전부", "나머지다", "나머지모두")):
         new_x = [c for c in num if c != new_y]
 
-    new_x = [c for c in new_x if c != new_y] or [c for c in num if c != new_y]
-    if new_x == state["x"] and new_y == state["y"]:
+    new_x = [c for c in new_x if c != new_y and c not in excluded] or [c for c in num if c != new_y and c not in excluded]
+    if not new_x or (new_x == state["x"] and new_y == state["y"]):
         return None
     state.update(x=new_x, y=new_y, results={})
-    return f"🎯 변수를 바꿨어요. Y = **{short(new_y)}**, X = {', '.join(short(c) for c in new_x)}"
+    xs = ", ".join(short(c) for c in new_x[:12]) + (f" 외 {len(new_x) - 12}개" if len(new_x) > 12 else "")
+    out = f"🎯 변수를 정했어요. Y = **{short(new_y)}**, X = {xs}"
+    if excluded:
+        out += f" (제외: {', '.join(short(c) for c in excluded)})"
+    return out
+
+
+def columns(state):
+    df = state["df"]
+    rows = []
+    for c in df.columns:
+        is_num = pd.api.types.is_numeric_dtype(df[c])
+        role = "Y (예측 대상)" if c == state["y"] else "X (입력)" if c in state["x"] else "사용 안 함" if is_num else "글자 (분석 제외)"
+        ex = ", ".join(str(v) for v in df[c].dropna().unique()[:3])
+        rows.append((c, "숫자" if is_num else "글자", role, int(df[c].isna().sum()), ex))
+    return reply(f"**{state['name']}**의 열 {df.shape[1]}개예요. 열 이름은 일부만 말하거나 한국어로 말해도 찾아요.",
+                 [("table", pd.DataFrame(rows, columns=["열 이름", "종류", "역할", "빈칸", "예시 값"]))])
+
+
+STATS = (("평균", ("평균", "mean", "average")), ("중앙값", ("중앙값", "중간값", "median")), ("최댓값", ("최대", "최댓", "가장큰", "제일큰", "가장높", "제일높", "max")),
+         ("최솟값", ("최소", "최솟", "가장작", "제일작", "가장낮", "제일낮", "min")), ("표준편차", ("표준편차", "std")), ("분산", ("분산", "variance")),
+         ("합계", ("합계", "총합", "더하면", "sum")), ("개수", ("개수", "갯수", "몇개", "몇행", "몇줄", "count")))
+
+
+def which_stats(t):
+    return [name for name, words in STATS if any(w in t for w in words)]
+
+
+def column_stats(state, text):
+    df, t = state["df"], norm(text)
+    num = numeric_cols(state)
+    cols = [c for _, c in find_cols(text, num)] or ([state["y"]] if len(num) > 12 else num)
+    names = which_stats(t) or ["평균", "표준편차", "최솟값", "최댓값"]
+    fn = {"평균": "mean", "중앙값": "median", "최댓값": "max", "최솟값": "min", "표준편차": "std", "분산": "var", "합계": "sum", "개수": "count"}
+    table = pd.DataFrame({"변수": [short(c) for c in cols], **{n: [round(float(getattr(df[c], fn[n])()), 4) for c in cols] for n in names}})
+    if len(cols) == 1 and len(names) <= 2:
+        text_out = f"**{short(cols[0])}**의 " + ", ".join(f"{n}은 **{table[n][0]:g}**" for n in names) + f"이에요. (전체 {len(df):,}행)"
+    else:
+        text_out = f"요청한 통계예요. (전체 {len(df):,}행)"
+    return reply(text_out, [("table", table)])
+
+
+def plot_cols(state, text):
+    df, t = state["df"], norm(text)
+    num = numeric_cols(state)
+    cols = [c for _, c in find_cols(text, num)]
+    hist = any(w in t for w in ("히스토그램", "분포", "histogram"))
+    if hist or len(cols) == 1:
+        c = cols[0] if cols else state["y"]
+        fig = go.Figure(go.Histogram(x=df[c], nbinsx=30, marker_color=COLORS[1]))
+        fig.update_layout(title=f"{short(c)}의 분포", xaxis_title=short(c), yaxis_title="개수", height=420, margin=dict(t=50, b=20))
+        return reply(f"**{short(c)}**의 분포예요. 평균 {df[c].mean():.4g}, 표준편차 {df[c].std():.4g}, 범위 {df[c].min():.4g} ~ {df[c].max():.4g}.",
+                     [("fig", fig)])
+    if len(cols) >= 2:
+        xs, y = cols[:-1], cols[-1]
+    else:
+        xs, y = state["x"][:1], state["y"]
+    fig = go.Figure()
+    for i, c in enumerate(xs[:4]):
+        fig.add_trace(go.Scatter(x=df[c], y=df[y], mode="markers", name=short(c), marker=dict(color=COLORS[i], size=6, opacity=0.6)))
+    fig.update_layout(title=f"{', '.join(short(c) for c in xs[:4])} 와(과) {short(y)}의 관계", xaxis_title=short(xs[0]) if len(xs) == 1 else "입력 변수",
+                      yaxis_title=short(y), height=460, margin=dict(t=50, b=20), legend=dict(orientation="h", y=-0.2))
+    r = df[[xs[0], y]].corr().iloc[0, 1]
+    return reply(f"**{short(xs[0])}**와 **{short(y)}**의 산점도예요. 상관계수는 {r:+.3f}이에요 "
+                 f"({'강한' if abs(r) >= 0.7 else '어느 정도의' if abs(r) >= 0.4 else '약한'} {'양' if r >= 0 else '음'}의 관계).", [("fig", fig)])
+
+
+def data_brief(state, limit=10):
+    """언어모델에게 알려 줄 데이터 요약 (열 이름과 기본 통계)."""
+    df = state["df"]
+    lines = [f"- 데이터 '{state['name']}': {len(df)}행, 열 = {', '.join(short(c) for c in df.columns[:20])}"]
+    for c in ([state["y"]] + state["x"])[:limit]:
+        lines.append(f"- {short(c)}: 평균 {df[c].mean():.4g}, 최소 {df[c].min():.4g}, 최대 {df[c].max():.4g}")
+    return lines
 
 
 def status(state):
@@ -228,7 +614,7 @@ def describe(state):
 
 
 def correlation(state):
-    cols = state["x"] + [state["y"]]
+    cols = state["x"][:14] + [state["y"]]
     corr = state["df"][cols].corr()
     names = [short(c) for c in cols]
     fig = go.Figure(go.Heatmap(z=corr.values, x=names, y=names, zmin=-1, zmax=1, colorscale="RdBu_r",
@@ -244,7 +630,9 @@ def correlation(state):
 # 3. 공통: 데이터 분할, 평가, 그래프
 # =============================================================
 def _split(state):
-    d = state["df"][state["x"] + [state["y"]]].dropna()
+    d = state["df"][state["x"] + [state["y"]]].replace([np.inf, -np.inf], np.nan)
+    d = d[d[state["y"]].notna()]
+    d = d.fillna(d.median(numeric_only=True)).dropna()        # 입력의 빈칸은 중앙값으로 채움
     X, y = d[state["x"]].values.astype(float), d[state["y"]].values.astype(float)
     if len(d) < 8:
         return X, X, y, y
@@ -518,10 +906,11 @@ def run_compare(state):
 
 
 def parse_inputs(state, text):
+    """'시멘트 300, 물 180'처럼 변수 이름 뒤에 온 숫자를 읽는다. 이름은 일부·한국어·영어 모두 인식."""
     t = norm(text)
     vals = {}
-    for c in state["x"]:
-        m = re.search(re.escape(norm(short(c))) + r"[^\d\-]{0,6}(-?\d+(?:\.\d+)?)", t)
+    for _, e, c in _find(text, state["x"]):
+        m = re.match(r"[^\d\-]{0,6}(-?\d+(?:\.\d+)?)", t[e:])
         if m:
             vals[c] = float(m.group(1))
     return vals
@@ -533,7 +922,7 @@ def run_predict(state, vals):
         run_linear(state)
         run_ann(state)
         notes.append("학습된 모델이 없어서 선형 회귀와 인공신경망을 먼저 학습했어요.")
-    d = state["df"][state["x"]].dropna()
+    d = state["df"][state["x"]]
     row, filled, outside = [], [], []
     for c in state["x"]:
         if c in vals:
@@ -541,7 +930,7 @@ def run_predict(state, vals):
             if not d[c].min() <= vals[c] <= d[c].max():
                 outside.append(short(c))
         else:
-            row.append(float(d[c].mean()))
+            row.append(float(d[c].median() if d[c].nunique() <= 2 else d[c].mean()))
             filled.append(short(c))
     X = np.array([row])
     rs = sorted(state["results"].values(), key=lambda r: -r["test_r2"])

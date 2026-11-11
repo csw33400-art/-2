@@ -69,7 +69,8 @@ COMMENT_PROMPT = ("너는 데이터 분석 조교다. 분석 결과를 한국어
 WELCOME = """안녕하세요! 저는 **채팅으로만 쓰는 데이터 분석 챗봇**이에요. 버튼 없이 말로 시키면 돼요.
 
 **이렇게 말해 보세요**
-- "콘크리트 데이터 불러와"
+- "콘크리트 데이터 불러와" (다른 데이터: "데이터 목록 보여줘")
+- 내 데이터 쓰기: 📎로 파일 첨부, 데이터 주소 붙여넣기, 표를 그대로 붙여넣기
 - "선형회귀 해줘" → "비선형회귀 해줘"
 - "인공신경망 학습해줘" → "딥러닝으로 해줘"
 - "전부 비교해줘" → "보고서 만들어줘"
@@ -82,9 +83,12 @@ HELP = """**채팅으로 할 수 있는 것**
 
 | 하고 싶은 것 | 이렇게 말하세요 |
 | --- | --- |
-| 데이터 불러오기 | "콘크리트 데이터 불러와", "당뇨병 데이터 불러와", "합성 데이터 불러와", CSV 주소(https://…) 붙여넣기, 입력창에 파일 첨부 |
-| 데이터 살펴보기 | "데이터 요약 보여줘", "상관관계 보여줘" |
-| 변수 정하기 | "Y는 압축강도, X는 시멘트랑 재령", "모든 변수로 해줘" |
+| 공개 데이터 쓰기 | "데이터 목록 보여줘", "자동차 연비 데이터 불러와", "펭귄 데이터 불러와", "집값 데이터 불러와" |
+| 내 데이터 쓰기 | 입력창 📎로 파일 첨부(CSV·Excel·TSV·TXT·JSON), 데이터 주소 붙여넣기(CSV·구글 스프레드시트·GitHub), 표를 채팅창에 그대로 붙여넣기 |
+| 숫자 직접 입력 | "x: 1, 2, 3, 4, 5 / y: 2.1, 3.9, 6.2, 8.1, 9.8" |
+| 데이터 살펴보기 | "데이터 요약 보여줘", "열 목록 보여줘", "상관관계 보여줘", "마력 평균 알려줘", "무게랑 연비 산점도 그려줘", "연비 분포 보여줘" |
+| 변수 정하기 | "Y는 압축강도, X는 시멘트랑 재령", "마력으로 연비 예측해줘", "무게에 따른 연비 분석해줘", "물 빼고 해줘", "모든 변수로 해줘" |
+| 변수 이름 | 일부만("슬래그"), 한국어로("몸무게" → weight), 순서로("첫 번째 열") 말해도 찾아요 |
 | 선형회귀 | "선형회귀 해줘", "시멘트로 선형회귀 해줘" |
 | 비선형회귀 | "비선형회귀 해줘", "3차 다항 회귀 해줘" |
 | 인공신경망 | "인공신경망 학습해줘", "은닉층 32-16, tanh, 에포크 500으로 신경망 학습해줘" |
@@ -97,7 +101,7 @@ HELP = """**채팅으로 할 수 있는 것**
 | 언어모델 | "엑사원으로 바꿔줘", "모델 정보 알려줘", "서버 사양 알려줘", "LLM 원리 설명해줘", "해설 꺼줘" |
 | 기타 | "대화 지워줘", 수업 개념 질문은 그냥 물어보세요 |"""
 
-LOAD = ("불러", "가져", "로드", "열어", "데이터로", "데이터써", "데이터사용", "데이터바꿔")
+LOAD = ("불러", "가져", "로드", "열어", "데이터로", "데이터써", "데이터사용", "데이터바꿔", "자료로", "가지고", "쓸래", "쓰자")
 STRONG = ("돌려", "실행", "학습해", "학습시", "훈련", "적합", "그려", "분석해", "해봐", "시켜", "만들어", "비교해")
 GENERIC = ("해줘", "해주", "하자", "해라", "ㄱㄱ", "부탁", "보여")
 EXPLAIN = ("설명", "뭐야", "뭔지", "무엇", "이유", "왜", "차이", "의미", "뜻", "개념", "원리", "어떻게")
@@ -376,6 +380,15 @@ def route(text, files):
         s = settings_command(t)
         if s:
             return [T.reply(s)], False
+        if has(t, "데이터", "자료") and has(t, "목록", "종류", "뭐있", "뭐가있", "어떤데이터", "어떤자료", "리스트", "쓸수있"):
+            return [T.dataset_list()], False
+        pasted = T.parse_pasted(text)                   # 채팅창에 직접 적거나 붙여넣은 데이터
+        if pasted is not None:
+            out.append(T.load_pasted(an, pasted))
+            text = " ".join(ln for ln in text.splitlines() if not re.search(r"\d", ln))
+            t = T.norm(text)
+            if not t:
+                return out, False
 
     # --- 데이터 불러오기 (파일 첨부, 주소, 내장 데이터) ---
     for f in files:
@@ -386,9 +399,11 @@ def route(text, files):
         text = text.replace(url.group(), " ")
         t = T.norm(text)
     key = T.match_dataset(t)
-    if key and has(t, *LOAD) and not files and not url:
+    if key and not files and not url and not out and (has(t, *LOAD) or an["df"] is None):
         out.append(T.load_dataset(an, key) if key != an["key"]
                    else T.reply(f"이미 **{an['name']}** 데이터를 쓰고 있어요."))
+        if out[-1]["text"].startswith("⚠️"):           # 내려받기 실패: 다른 데이터로 넘어가지 않고 알림
+            return out, False
 
     explain_q, strong, generic = has(t, *EXPLAIN), has(t, *STRONG), has(t, *GENERIC)
 
@@ -404,6 +419,12 @@ def route(text, files):
     # --- 분석 실행 ---
     intents = detect_intents(t, text)
     run = strong or (generic and not explain_q) or (bool(intents) and len(t) <= 12 and not explain_q)
+    plot_q = has(t, "산점도", "그래프", "그림", "플롯", "plot", "히스토그램", "분포", "시각화")
+    if (not intents and run and not explain_q and not plot_q and not re.search(r"\d", t)
+            and has(t, "예측", "맞춰", "추정", "에따른", "에따라", "관계", "영향")):
+        ensure_data(out)                                # "마력으로 연비 예측해줘" → 변수를 정하고 세 모델로 분석
+        if T.find_cols(text, T.numeric_cols(an)):
+            intents = ["linear", "nonlinear", "ann"]
     if intents and run:
         ensure_data(out)
         note = T.parse_vars(an, text)
@@ -434,13 +455,21 @@ def route(text, files):
     # --- 그 밖의 도구 ---
     if has(t, "보고서", "리포트"):
         return out + [T.report(an)], False
+    if has(t, "열", "컬럼", "칼럼", "변수", "column") and has(t, "목록", "뭐있", "뭐가있", "어떤", "리스트", "이름", "종류") and not explain_q:
+        ensure_data(out)
+        return out + [T.columns(an)], False
+    if plot_q and not has(t, "상관") and has(t, "그려", "보여", "해줘", "만들어", "plot", "봐"):
+        ensure_data(out)
+        return out + [T.plot_cols(an, text)], False
+    if T.which_stats(t) and an["df"] is not None and T.find_cols(text, T.numeric_cols(an)):
+        return out + [T.column_stats(an, text)], False
     if has(t, "상관") and has(t, "보여", "그려", "분석", "히트맵", "해줘", "알려"):
         ensure_data(out)
         return out + [T.correlation(an)], False
     if has(t, "데이터") and has(t, "보여", "요약", "미리", "통계", "확인", "어떻게생"):
         ensure_data(out)
         return out + [T.describe(an)], False
-    if T.has_var_marker(t) or (has(t, "변수") and has(t, "설정", "바꿔", "로해", "사용", "만써", "전체", "모든")):
+    if T.has_var_marker(t) or has(t, "빼고", "제외", "빼줘") or (has(t, "변수") and has(t, "설정", "바꿔", "로해", "사용", "만써", "전체", "모든")):
         ensure_data(out)
         note = T.parse_vars(an, text)
         return out + [T.reply(note) if note else T.status(an)], False
@@ -458,7 +487,8 @@ def llm_context():
     an = st.session_state.an
     lines = []
     if an["df"] is not None:
-        lines.append(f"- 현재 데이터: {an['name']}, Y={T.short(an['y'])}, X={', '.join(T.short(c) for c in an['x'])}")
+        lines.append(f"- 현재 설정: Y={T.short(an['y'])}, X={', '.join(T.short(c) for c in an['x'][:12])}")
+        lines += T.data_brief(an)
     for r in an["results"].values():
         lines.append(f"- {r['label']}: 테스트 R² {r['test_r2']:.3f}, RMSE {r['rmse']:.2f}, 학습 R² {r['train_r2']:.3f}")
     for m in T.recall_all()[-3:]:
@@ -504,7 +534,7 @@ for i, m in enumerate(ss.messages):
     with st.chat_message(m["role"]):
         render(m, i)
 
-inp = st.chat_input("메시지를 입력하세요 (예: 선형회귀 해줘 / 도움말)", accept_file=True, file_type=["csv", "xlsx", "xls"])
+inp = st.chat_input("메시지를 입력하세요 (예: 선형회귀 해줘 / 도움말)", accept_file=True, file_type=["csv", "xlsx", "xls", "tsv", "txt", "json"])
 
 if inp:
     text = inp if isinstance(inp, str) else (getattr(inp, "text", "") or "")
@@ -513,7 +543,10 @@ if inp:
     if text and files:
         shown += f"\n\n📎 {files[0].name}"
 
-    replies, to_llm = route(text, files)
+    try:
+        replies, to_llm = route(text, files)
+    except Exception as e:                      # 예상하지 못한 입력에도 앱이 멈추지 않게
+        replies, to_llm = [T.reply(f"⚠️ 요청을 처리하다 오류가 났어요: {e}\n\n다르게 말해 보거나 \"도움말\"이라고 입력해 보세요.")], False
     if replies == "CLEAR":
         ss.messages = []
         st.rerun()
