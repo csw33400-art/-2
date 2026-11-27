@@ -20,9 +20,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OPENROUTER_URL = os.environ.get("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")
 # 무료 모델 목록 (앞에서부터 시도). 가중치가 공개된 오픈소스 모델을 이름으로 지정한다.
-#   Qwen3-Coder (Alibaba, Apache 2.0) · gpt-oss-20b (OpenAI 공개 가중치, Apache 2.0) · Llama 3.3 70B (Meta, Llama 라이선스)
+#   Nemotron 3.5 Super VL (NVIDIA, 120B·활성 12B, 공개 가중치) — 배포 후 실제로 도구 호출에 성공한 모델
+#   Qwen3-Coder (Alibaba, Apache 2.0) · gpt-oss-20b (OpenAI 공개 가중치, Apache 2.0) · Llama 3.3 70B (Meta)
 # 모두 응답하지 않을 때만 마지막으로 openrouter/free(OpenRouter가 무료 모델 중 하나를 자동 선택)를 쓴다.
-DEFAULT_MODELS = ["qwen/qwen3-coder:free", "openai/gpt-oss-20b:free", "meta-llama/llama-3.3-70b-instruct:free", "openrouter/free"]
+DEFAULT_MODELS = ["nvidia/nemotron-3.5-super-vl:free", "qwen/qwen3-coder:free", "openai/gpt-oss-20b:free",
+                  "meta-llama/llama-3.3-70b-instruct:free", "openrouter/free"]
 LOCAL_MODEL = {"repo": "lmstudio-community/Qwen2.5-1.5B-Instruct-GGUF", "file": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"}
 
 
