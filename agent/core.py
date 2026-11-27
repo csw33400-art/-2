@@ -141,6 +141,9 @@ def rule_plan(state, text):
         msg = T.parse_vars(state, text)
         if msg:
             plan.append(("current_status", {}))
+    sweep = T.parse_sweep(state, text) if state["df"] is not None else None
+    if sweep:                                   # "물이 늘어나면 강도는?", "시멘트를 100에서 500까지 바꾸면?"
+        return plan + [("sweep_variable", {"variable": sweep[0], "start": sweep[1], "end": sweep[2]})]
     vals = T.parse_inputs(state, text) if state["df"] is not None else {}
     rules = [(r"대시보드|모든모델|13|랜덤포레스트|부스팅|svr|knn|릿지|라쏘|결정트리", ("run_dashboard_models", {})),
              (r"비교|전부|다돌려|모두", ("compare_models", {})),
