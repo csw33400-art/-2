@@ -23,9 +23,10 @@ import knowledge_base as KB  # noqa: E402
 import programs as P  # noqa: E402
 import llm as L  # noqa: E402
 import core as C  # noqa: E402
+import memory_store as M  # noqa: E402
 
 # 코드를 새로 올리면 서버는 app.py만 다시 읽으므로, 다른 파일이 바뀌었으면 다시 불러온다.
-_MODS = (K, T, KB, P, L, C)
+_MODS = (K, T, KB, P, L, C, M)
 _STAMP = tuple(os.path.getmtime(m.__file__) for m in _MODS)
 if getattr(sys, "_agent_stamp", _STAMP) != _STAMP:
     for m in _MODS:
@@ -82,6 +83,16 @@ def engines(key, models):
 
 ROUTER, LOCAL = engines(secret("OPENROUTER_API_KEY"), secret("OPENROUTER_MODELS"))
 
+
+@st.cache_resource(show_spinner=False)
+def memory_store(token):
+    store = M.MemoryStore(token)
+    store.pull()                       # 서버가 켜질 때 GitHub에 저장해 둔 기억을 읽어 옴
+    return store
+
+
+MEMORY = memory_store(secret("GITHUB_TOKEN"))
+
 ss = st.session_state
 if "state" not in ss:
     ss.state = T.new_state()
@@ -132,7 +143,9 @@ def diagnose():
             lines.append(f"- 마지막으로 답한 모델: {ROUTER.last_model}")
     lines.append(f"- 예비 모델: 서버 설치 {L.LOCAL_MODEL['file']} (llama.cpp)")
     lines.append(f"- 연결된 프로그램: 과제 1·2 대시보드 모델 {len(P.dashboard()['ALL_MODELS'])}종, 과제 3 분석 도구, 도구 {len(P.TOOLS)}개")
-    lines.append(f"- 강의 지식 조각 {len(KB.LECTURE) + len(K.NOTES)}개, 기억 {len(T.recall_all())}개")
+    lines.append(f"- 강의 지식 조각 {len(KB.LECTURE) + len(K.NOTES)}개, 기억 {len(T.recall_all())}개 (사용자 정보 {len(C.facts())}개)")
+    lines.append("- 오래가는 기억: " + ("✅ GitHub memory 브랜치에 저장" + (f" (⚠️ {MEMORY.error})" if MEMORY.error else "")
+                                     if MEMORY.enabled else "❌ 꺼짐 (Secrets에 GITHUB_TOKEN이 없어 서버가 다시 켜지면 기억이 지워짐)"))
     return "**🩺 진단 결과**\n\n" + "\n".join(lines)
 
 
@@ -163,6 +176,7 @@ if prompt:
         st.rerun()
     if "기억지워" in t:
         T.forget_all()
+        MEMORY.push()
         ss.messages.append({"role": "assistant", "content": "기억 메모를 모두 지웠어요.", "events": []})
         st.rerun()
     if t in ("진단", "상태점검"):
@@ -199,3 +213,4 @@ if prompt:
                     continue
                 msg["events"].append(ev)
     ss.messages.append(msg)
+    MEMORY.push()                      # 이번 대화에서 늘어난 기억을 GitHub에 저장 (열쇠가 있을 때만)

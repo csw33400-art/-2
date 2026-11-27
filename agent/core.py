@@ -34,15 +34,45 @@ SYSTEM = """너는 '{title}'의 AI 분석가다. 사용자는 클릭 없이 대�
 4. 개념 질문(역전파, 과적합, 활성화 함수, LLM 등)은 search_lecture로 강의 내용을 먼저 찾아 근거로 설명하고,
    내 코드에서 어디에 쓰였는지 물으면 search_my_code를 쓴다.
 5. 도구 결과를 받으면 한국어로 3~6문장으로 핵심 수치와 의미를 설명한다. 표·그래프는 화면에 이미 나오므로 다시 옮겨 적지 않는다.
-6. 사용자가 기억해 달라고 하면 remember, 지난 작업을 물으면 recall_memory를 쓴다.
+6. 사용자가 기억해 달라고 하거나, 자기 이름·소속·관심사·선호처럼 다음에도 알아야 할 정보를 말하면 remember로 적는다.
+   지난 작업이나 기억을 물으면 recall_memory를 쓰거나 아래 [기억하고 있는 정보]를 보고 답한다.
+7. [기억하고 있는 정보]에 사용자 이름이 있으면 그 이름으로 부르고, 이미 아는 것을 다시 묻지 않는다.
 
 [현재 상태] {state}
-[최근 기억] {memory}"""
+[기억하고 있는 정보] {facts}
+[최근 작업 기록] {memory}"""
+
+FACT_PREFIX = ("사용자 정보:", "메모:")
+NAME_PAT = re.compile(r"(?:내|제|나의|저의)\s*이름은\s*([가-힣A-Za-z]{1,12}?)(?:이야|야|이에요|예요|입니다|이다|라고|이라고|$|\s|[.!,])")
+CALL_PAT = re.compile(r"(?:나를|날|저를)\s*([가-힣A-Za-z]{1,12}?)(?:이라고|라고)\s*불러")
+
+
+def facts():
+    """기억 메모 중 사용자 정보와 '기억해 줘'로 적은 메모만 모은다 (작업 기록과 구분)."""
+    return [m["summary"] for m in T.recall_all() if str(m["summary"]).startswith(FACT_PREFIX)]
+
+
+def capture_facts(text):
+    """LLM이 놓치더라도 이름은 확실히 기억하도록, '내 이름은 ○○' 같은 말을 직접 적는다."""
+    for pat in (NAME_PAT, CALL_PAT):
+        m = pat.search(text)
+        if m and m.group(1) not in facts_names():
+            old = [x for x in T.recall_all() if "사용자의 이름" not in str(x["summary"])]   # 예전 이름은 지우고 새 이름만 남김
+            T.MEMORY_FILE.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+            T.remember(f"사용자 정보: 사용자의 이름(부를 이름)은 {m.group(1)}")
+            return m.group(1)
+    return None
+
+
+def facts_names():
+    return " ".join(facts())
 
 
 def system_prompt(state, title="LLM 기반 자동 데이터분석 시스템"):
-    mem = "; ".join(m["summary"] for m in T.recall_all()[-5:]) or "없음"
-    return SYSTEM.format(title=title, state=P._state_line(state), memory=mem[:600])
+    work = [m["summary"] for m in T.recall_all() if not str(m["summary"]).startswith(FACT_PREFIX)]
+    mem = "; ".join(work[-5:]) or "없음"
+    fx = "; ".join(facts()[-15:]) or "없음"
+    return SYSTEM.format(title=title, state=P._state_line(state), memory=mem[:600], facts=fx[:900])
 
 
 def _history(history):
@@ -135,6 +165,8 @@ def rule_plan(state, text):
         return plan + [("search_my_code", {"query": text})]
     if re.search(r"기억해|메모해", t):
         return [("remember", {"note": text})]
+    if re.search(r"내이름|나누구|내가누구", t):
+        return [("recall_memory", {})]
     if re.search(r"지난|기억|전에뭐|뭐했", t):
         return [("recall_memory", {})]
     if state["df"] is not None and (T.has_var_marker(t) or re.search(r"빼고|제외|으로.*예측|로.*예측", t)):
@@ -191,6 +223,9 @@ def _loop_rules(state, history, text, local):
 # 4. 한 번의 대화: 1순위 → 2순위 → 3순위 순서로 시도
 # =============================================================
 def run_turn(state, history, text, router, local):
+    name = capture_facts(text)
+    if name:
+        yield {"type": "notice", "text": f"📝 '{name}'(이)라는 이름을 기억해 둘게요."}
     if router is not None and router.available:
         try:
             yield from _loop_native(state, history, text, router)
