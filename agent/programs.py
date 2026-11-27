@@ -278,6 +278,26 @@ def _state_line(state):
             f"X=[{', '.join(T.short(c) for c in state['x'][:12])}], 학습한 모델(R² 높은 순): {done}{more}")
 
 
+def _fit_axes(rep):
+    """'실제값 vs 예측값' 그래프의 두 축을 전체 점이 다 보이는 범위로 고정한다.
+    (과제 3 파일은 고치지 않고, 마지막 과제에서 받은 그래프만 손본다.)"""
+    for kind, fig in rep.get("items", []):
+        if kind != "fig":
+            continue
+        try:
+            title = fig.layout.title.text or ""
+            if "실제값" not in title:
+                continue
+            vals = np.concatenate([np.asarray(v, float).ravel() for t in fig.data for v in (t.x, t.y) if v is not None])
+            vals = vals[np.isfinite(vals)]
+            if vals.size:
+                pad = (vals.max() - vals.min()) * 0.05 or 1.0
+                rng = [float(vals.min() - pad), float(vals.max() + pad)]
+                fig.update_layout(xaxis=dict(range=rng), yaxis=dict(range=rng))
+        except Exception:      # 그래프 모양이 달라도 실행 결과에는 영향 없게
+            continue
+
+
 def execute(state, name, args):
     """도구 하나를 실행한다. (화면용 결과, LLM에게 돌려줄 글)"""
     args = args or {}
@@ -288,6 +308,7 @@ def execute(state, name, args):
         rep = _run(state, name, args, notes)
     except Exception as e:  # 도구가 실패해도 LLM에게 이유를 알려 다른 방법을 찾게 함
         rep = T.reply(f"⚠️ `{name}` 실행 중 오류: {type(e).__name__}: {e}")
+    _fit_axes(rep)
     if notes:
         rep["text"] = "\n".join(f"ℹ️ {n}" for n in notes) + "\n\n" + rep.get("text", "")
     if rep.get("summary"):
