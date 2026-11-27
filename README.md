@@ -7,6 +7,7 @@
 | 과제 1 | 공개 자료로 선형회귀·비선형회귀를 수행하는 프로그램 | [Notion 설명서](https://azure-raven-7e9.notion.site/3e8361e0fce780ca92f9c0e32fbaffdb) |
 | 과제 2 | 공개 자료로 인공신경망을 이용한 데이터 예측 프로그램 | [Notion 설명서](https://azure-raven-7e9.notion.site/630361e0fce78206b1f3813ff1f691fa) |
 | 과제 3 | 오픈소스 LLM을 설치해 만든 챗봇 (자유 대화 + 채팅으로 회귀·신경망·딥러닝 실행) | [Notion 설명서](https://azure-raven-7e9.notion.site/415361e0fce78150b289ea116d183560) · [프로그램 설명서](llm_chat/docs/PROGRAM.md) · [코드 설명서](llm_chat/docs/CODE.md) |
+| 마지막 과제 | LLM 기반 자동 데이터분석 시스템: 오픈소스 LLM이 대화로 과제 1·2·3 프로그램을 직접 운용 (도구 호출, RAG, 기억) | [설명](agent/README.md) · [프로그램 설명서](agent/docs/PROGRAM.md) · [코드 설명서](agent/docs/CODE.md) · [시험 대비](agent/docs/EXAM.md) |
 
 - 웹에서 바로 실행: https://2flnfab8wrd8cdseatvmj4.streamlit.app
 - 과제 모음 페이지: [데이터처리개론 과제 (Notion)](https://azure-raven-7e9.notion.site/3f9361e0fce781609556d7190fe57ba1)
@@ -62,6 +63,13 @@ streamlit run app.py
 .
 ├── app.py                 # Streamlit 대시보드 (프로그램 본체)
 ├── requirements.txt       # 필요한 패키지
+├── agent/                 # 마지막 과제: LLM 기반 자동 데이터분석 시스템 (별도 Streamlit 앱)
+│   ├── app.py             # 채팅 화면
+│   ├── core.py            # LLM 에이전트 (명령 → 실행 → 결과 회신)
+│   ├── llm.py             # OpenRouter 무료 오픈소스 모델 / 서버 설치 모델 연결
+│   ├── programs.py        # 프로그램 연결층: 도구 24개, 과제 1·2 대시보드 모델 불러오기
+│   ├── knowledge_base.py  # 강의 RAG, 내 코드 검색
+│   └── docs/              # 프로그램·코드 설명서, 시험 대비
 ├── llm_chat/
 │   ├── app.py             # 채팅 전용 데이터 분석 챗봇 (별도 Streamlit 앱)
 │   ├── tools.py           # 채팅으로 실행하는 분석 도구 (회귀·신경망·예측·보고서)

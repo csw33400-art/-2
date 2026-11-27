@@ -1,0 +1,12 @@
+# LLM 기반 자동 데이터분석 시스템 전용 패키지 (과제 3 챗봇과 같은 구성)
+# LLM 기반 자동 데이터분석 시스템 전용 패키지 (과제 3 챗봇과 같은 구성)
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+llama-cpp-python>=0.3.16
+huggingface-hub>=0.23
+streamlit>=1.51
+pandas
+numpy
+scikit-learn>=1.2
+scipy
+plotly
+openpyxl
