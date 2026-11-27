@@ -140,6 +140,9 @@ st.title(f"🤖 {TITLE}")
 engine_now = (f"OpenRouter 무료 오픈소스 모델 (도구 호출)" if ROUTER and ROUTER.available
               else "서버에 설치한 오픈소스 모델 Qwen2.5-1.5B (예비 모드)")
 st.caption(f"오픈소스 LLM이 대화로 과제 1·2·3 프로그램을 운용해요 · 지금 쓰는 LLM: {engine_now}")
+st.caption("📘 [설명서 (Notion)](https://azure-raven-7e9.notion.site/425361e0fce781e8b3ffcd29c2102751) · "
+           "💻 [코드 (GitHub)](https://github.com/csw33400-art/-2/tree/main/agent) · "
+           "📚 [과제 모음](https://azure-raven-7e9.notion.site/3f9361e0fce781609556d7190fe57ba1)")
 
 for i, m in enumerate(ss.messages):
     draw_message(m, i)
