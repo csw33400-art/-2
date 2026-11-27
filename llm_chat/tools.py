@@ -727,8 +727,14 @@ def _fig_actual_pred(state, results, title):
         lo, hi = min(lo, r["y_test"].min()), max(hi, r["y_test"].max())
     fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="완벽한 예측 (y=x)",
                              line=dict(color="#222", dash="dash")))
+    preds = np.concatenate([np.asarray(r["pred_test"], float) for r in results])
+    preds = preds[np.isfinite(preds)]
+    a, b = min(lo, preds.min() if preds.size else lo), max(hi, preds.max() if preds.size else hi)
+    pad = (b - a) * 0.05 or 1.0
+    rng = [float(a - pad), float(b + pad)]          # 전체 점이 다 보이도록 두 축 범위를 같게 고정
     fig.update_layout(title=title, xaxis_title=f"실제 {short(state['y'])}", yaxis_title=f"예측 {short(state['y'])}",
-                      height=460, margin=dict(t=50, b=20), legend=dict(orientation="h", y=-0.2))
+                      height=460, margin=dict(t=50, b=20), legend=dict(orientation="h", y=-0.2),
+                      xaxis=dict(range=rng), yaxis=dict(range=rng))
     return fig
 
 
