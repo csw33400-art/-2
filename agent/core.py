@@ -151,6 +151,10 @@ def _loop_text(state, history, text, ask, engine):
 def rule_plan(state, text):
     """인터넷 LLM을 못 쓸 때 쓰는 규칙. 말 속의 낱말로 실행할 도구 목록을 정한다."""
     t = T.norm(text)
+    if NAME_PAT.search(text) or CALL_PAT.search(text):
+        return []                                   # 이름 알려 주기: capture_facts가 이미 적어 둠
+    if re.search(r"내이름|나누구|내가누구|나를뭐라고", t):
+        return [("recall_memory", {})]
     plan = []
     key = T.match_dataset(t)
     if key and (state["key"] != key or re.search(r"불러|가져|로드|데이터로", t)):
@@ -209,7 +213,9 @@ def _loop_rules(state, history, text, local):
     prompt = ("다음 도구 결과를 한국어 3문장으로 쉽게 설명해 줘. 숫자는 결과에 있는 것만 써.\n\n" + "\n\n".join(results)) if results \
         else (f"질문: {text}\n\n참고 자료:\n{ref}\n\n참고 자료를 근거로 한국어로 쉽게 답해 줘." if ref else text)
     try:
-        answer = local.chat([{"role": "system", "content": "너는 데이터 분석을 돕는 한국어 AI 조교다. 짧고 정확하게 답한다."},
+        known = "; ".join(facts()[-10:])
+        answer = local.chat([{"role": "system", "content": "너는 데이터 분석을 돕는 한국어 AI 조교다. 짧고 정확하게 답한다."
+                              + (f" 기억하고 있는 사용자 정보: {known}" if known else "")},
                              {"role": "user", "content": prompt[:3500]}])
         engine = "서버 설치 모델 Qwen2.5-1.5B (예비 모드)"
     except L.LLMError as e:
